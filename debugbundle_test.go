@@ -324,7 +324,7 @@ func TestFailedInitRemoteConfigFallsBackToMinimalPolicy(t *testing.T) {
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	client.CaptureLog(context.Background(), "warning blocked", LevelWarning, nil)
 	client.CaptureLog(context.Background(), "error kept", LevelError, nil)
 	okRequest := httptest.NewRequest(http.MethodGet, "https://example.test/health", nil)
@@ -362,7 +362,7 @@ func TestFailedInitRemoteConfigKeepsAlwaysOnProbeBuffers(t *testing.T) {
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	client.Probe(context.Background(), "checkout.cart", map[string]any{"items": 3})
 	client.CaptureException(context.Background(), errors.New("boom"))
 	if err := client.Flush(context.Background()); err != nil {
@@ -415,7 +415,7 @@ func TestFailedRemoteConfigRefreshSchedulesFallbackRetry(t *testing.T) {
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	client.mu.Lock()
 	if client.remoteConfigTimer != nil {

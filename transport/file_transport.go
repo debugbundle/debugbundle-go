@@ -61,7 +61,7 @@ func (transport *FileTransport) Send(ctx context.Context, request Request) (Resp
 		return Response{}, err
 	}
 	if _, err := file.Write(payload); err != nil {
-		file.Close()
+		_ = file.Close()
 		_ = os.Remove(tempPath)
 		return Response{}, err
 	}

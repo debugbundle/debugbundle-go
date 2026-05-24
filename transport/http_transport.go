@@ -41,7 +41,7 @@ func (transport *HTTPTransport) Send(ctx context.Context, request Request) (Resp
 	if err != nil {
 		return Response{}, err
 	}
-	defer httpResponse.Body.Close()
+	defer func() { _ = httpResponse.Body.Close() }()
 	return Response{
 		StatusCode: httpResponse.StatusCode,
 		RetryAfter: boundedRetryAfter(httpResponse.Header.Get("Retry-After")),

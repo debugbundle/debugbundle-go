@@ -106,7 +106,7 @@ func (fetcher *HTTPRemoteConfigFetcher) Fetch(ctx context.Context, request Remot
 	if err != nil {
 		return RemoteConfigResponse{}, err
 	}
-	defer httpResponse.Body.Close()
+	defer func() { _ = httpResponse.Body.Close() }()
 	body, err := ioReadAll(httpResponse.Body)
 	if err != nil {
 		return RemoteConfigResponse{}, err
