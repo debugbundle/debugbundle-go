@@ -81,7 +81,7 @@ jobs:
         run: make smoke-module
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.0
         with:
           tag_name: v${{ steps.release_version.outputs.value }}
           generate_release_notes: true
