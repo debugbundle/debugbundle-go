@@ -133,12 +133,6 @@ func resolveOptions(config debugbundle.RuntimeConfig, options Options) Options {
 	if resolved.SpoolDir == "" {
 		resolved.SpoolDir = config.SpoolDir
 	}
-	if resolved.Service == "" {
-		resolved.Service = config.Service
-	}
-	if resolved.Environment == "" {
-		resolved.Environment = config.Environment
-	}
 	return resolved
 }
 

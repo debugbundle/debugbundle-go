@@ -67,6 +67,20 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release_version.outputs.value }}
 
+      - name: Validate release tag is fetchable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="v${RELEASE_VERSION}"
+          if ! git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            echo "release_tag_not_found:${tag}" >&2
+            echo "Create and push ${tag} before running the release workflow so published-module smoke can install the exact public module version." >&2
+            exit 1
+          fi
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.value }}
+
       - name: Run quality gates
         run: |
           make verify
@@ -77,8 +91,13 @@ jobs:
         with:
           version: v2.12.2
 
-      - name: Validate publishable module
-        run: make smoke-module
+      - name: Run clean-install smoke from the checked-out module
+        run: make smoke
+
+      - name: Run clean-install smoke from the published module path
+        run: make smoke-published VERSION=${RELEASE_VERSION}
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.value }}
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3.0.0

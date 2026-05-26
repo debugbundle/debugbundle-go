@@ -1,5 +1,6 @@
 GO ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
 GOLANGCI_LINT ?= golangci-lint
+SMOKE_GO_IMAGE ?= golang:1.26-bookworm
 
 .PHONY: test
 test:
@@ -21,36 +22,17 @@ lint:
 mod-check:
 	$(GO) list -m all >/dev/null
 
+.PHONY: smoke
+smoke:
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(SMOKE_GO_IMAGE) sh smoke/run_app_driven_smoke.sh --source local
+
+.PHONY: smoke-published
+smoke-published:
+	@if [ -z "$(VERSION)" ]; then echo "VERSION is required for smoke-published" >&2; exit 1; fi
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(SMOKE_GO_IMAGE) sh smoke/run_app_driven_smoke.sh --source published --version $(VERSION)
+
 .PHONY: smoke-module
-smoke-module:
-	@tmpdir="$$(mktemp -d)"; \
-	trap 'rm -rf "$$tmpdir"' EXIT; \
-	printf '%s\n' \
-		'module debugbundle-go-smoke' \
-		'' \
-		'go 1.21' \
-		'' \
-		'require github.com/debugbundle/debugbundle-go v0.0.0' \
-		'' \
-		'replace github.com/debugbundle/debugbundle-go => $(CURDIR)' > "$$tmpdir/go.mod"; \
-	printf '%s\n' \
-		'package main' \
-		'' \
-		'import (' \
-		'    "context"' \
-		'' \
-		'    debugbundle "github.com/debugbundle/debugbundle-go"' \
-		')' \
-		'' \
-		'func main() {' \
-		'    client := debugbundle.New(debugbundle.Config{' \
-		'        ProjectToken: "dbundle_proj_smoke",' \
-		'        Service:      "smoke-api",' \
-		'        Environment:  "test",' \
-		'    })' \
-		'    _ = client.Flush(context.Background())' \
-		'}' > "$$tmpdir/main.go"; \
-	cd "$$tmpdir" && $(GO) mod tidy && $(GO) build .
+smoke-module: smoke
 
 .PHONY: verify
 verify: test vet mod-check

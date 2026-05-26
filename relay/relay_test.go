@@ -361,6 +361,53 @@ func TestRelayConnectedDurableWritesSpoolForwardsAndMarksDelivered(t *testing.T)
 	}
 }
 
+func TestRelayWithClientKeepsBrowserServiceIdentityByDefault(t *testing.T) {
+	forwarder := &recordingTransport{}
+	client := debugbundle.New(debugbundle.Config{
+		ProjectToken: "dbundle_proj_test",
+		Service:      "api-service",
+		Environment:  "production",
+		Transport:    forwarder,
+	})
+	defer func() {
+		_ = client.Close()
+	}()
+
+	handler := NewHandler(client, Options{
+		AllowedOrigins: []string{"https://app.example.test"},
+		ProjectMode:    debugbundle.ProjectModeConnected,
+		ProjectToken:   "dbundle_proj_test",
+		Endpoint:       "https://api.example.test/v1/events",
+		Transport:      forwarder,
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "https://api.example.test/debugbundle/browser", strings.NewReader(`{"batch":[{"schema_version":"2026-03-01","event_id":"00000000-0000-4000-8000-000000000612","event_type":"frontend_exception","occurred_at":"2026-05-23T12:00:00Z","sdk_name":"@debugbundle/sdk-browser","sdk_version":"0.1.0","service":{"name":"web-app","environment":"test","runtime":"browser"},"payload":{"message":"ok"}}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://app.example.test")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted relay response, got %d body=%s", response.Code, response.Body.String())
+	}
+	if len(forwarder.requests) != 1 {
+		t.Fatalf("expected one forwarded request, got %#v", forwarder.requests)
+	}
+
+	var forwarded map[string]any
+	if err := json.Unmarshal(forwarder.requests[0].Events[0], &forwarded); err != nil {
+		t.Fatalf("unmarshal forwarded event: %v", err)
+	}
+	service := forwarded["service"].(map[string]any)
+	if service["name"] != "web-app" {
+		t.Fatalf("expected browser service name to be preserved, got %#v", service["name"])
+	}
+	if service["environment"] != "test" {
+		t.Fatalf("expected browser environment to be preserved, got %#v", service["environment"])
+	}
+}
+
 func TestRelayConnectedDurableRetainsSpoolWhenForwardFails(t *testing.T) {
 	spoolDir := t.TempDir()
 	forwarder := &recordingTransport{response: transport.Response{StatusCode: http.StatusInternalServerError}}
