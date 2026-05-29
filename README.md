@@ -154,7 +154,7 @@ The buildable examples under [`examples/`](examples/) compile as part of `go tes
 This SDK ships as one Go module. Keep every imported subpackage on the same module version by pinning the root module once:
 
 ```bash
-go get github.com/debugbundle/debugbundle-go@v0.1.0
+go get github.com/debugbundle/debugbundle-go@v0.1.2
 ```
 
 Then import subpackages such as `debugbundlehttp`, `relay`, `debugbundleslog`, `debugbundlegin`, and `debugbundleecho` from that same module version. Do not mix snippets from different tags when copying examples between services.

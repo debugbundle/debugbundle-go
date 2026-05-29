@@ -137,12 +137,17 @@ func resolveOptions(config debugbundle.RuntimeConfig, options Options) Options {
 }
 
 func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodPost {
-		writer.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
 	if !handler.originAllowed(request) {
 		writer.WriteHeader(http.StatusForbidden)
+		return
+	}
+	setCORSHeaders(writer, requestOrigin(request))
+	if request.Method == http.MethodOptions {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if request.Method != http.MethodPost {
+		writer.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	if !strings.Contains(strings.ToLower(request.Header.Get("Content-Type")), "application/json") {
@@ -284,10 +289,7 @@ func (handler *handler) defaultSpoolDir() string {
 }
 
 func (handler *handler) originAllowed(request *http.Request) bool {
-	origin := request.Header.Get("Origin")
-	if strings.TrimSpace(origin) == "" {
-		origin = originFromReferer(request.Header.Get("Referer"))
-	}
+	origin := requestOrigin(request)
 	if origin == "" {
 		return false
 	}
@@ -301,6 +303,22 @@ func (handler *handler) originAllowed(request *http.Request) bool {
 	}
 	expected := inferredOrigin(request, handler.options.TrustForwardedHeader)
 	return normalizeOrigin(expected) == normalizeOrigin(origin)
+}
+
+func requestOrigin(request *http.Request) string {
+	origin := request.Header.Get("Origin")
+	if strings.TrimSpace(origin) != "" {
+		return origin
+	}
+	return originFromReferer(request.Header.Get("Referer"))
+}
+
+func setCORSHeaders(writer http.ResponseWriter, origin string) {
+	writer.Header().Set("Access-Control-Allow-Origin", origin)
+	writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	writer.Header().Set("Access-Control-Allow-Headers", "content-type")
+	writer.Header().Set("Access-Control-Max-Age", "600")
+	writer.Header().Set("Vary", "Origin")
 }
 
 func sanitizeEvent(candidate map[string]any, options Options) (map[string]any, error) {

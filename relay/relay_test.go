@@ -40,6 +40,43 @@ func TestRelayRejectsWrongOrigin(t *testing.T) {
 	}
 }
 
+func TestRelayAnswersAllowedCrossOriginPreflight(t *testing.T) {
+	handler := NewHandler(nil, Options{AllowedOrigins: []string{"https://web.example.test"}})
+	request := httptest.NewRequest(http.MethodOptions, "https://api.example.test/debugbundle/browser", nil)
+	request.Header.Set("Origin", "https://web.example.test")
+	request.Header.Set("Access-Control-Request-Method", "POST")
+	request.Header.Set("Access-Control-Request-Headers", "content-type")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expected no content preflight response, got %d", response.Code)
+	}
+	if response.Header().Get("Access-Control-Allow-Origin") != "https://web.example.test" {
+		t.Fatalf("expected allowed origin header, got %q", response.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if response.Header().Get("Access-Control-Allow-Methods") != "POST, OPTIONS" {
+		t.Fatalf("expected allowed methods header, got %q", response.Header().Get("Access-Control-Allow-Methods"))
+	}
+}
+
+func TestRelayAddsCORSHeadersToAcceptedCrossOriginPosts(t *testing.T) {
+	handler := NewHandler(nil, Options{AllowedOrigins: []string{"https://web.example.test"}})
+	request := httptest.NewRequest(http.MethodPost, "https://api.example.test/debugbundle/browser", strings.NewReader(`{"batch":[]}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "https://web.example.test")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted relay response, got %d body=%s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Access-Control-Allow-Origin") != "https://web.example.test" {
+		t.Fatalf("expected allowed origin header, got %q", response.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if response.Header().Get("Vary") != "Origin" {
+		t.Fatalf("expected vary origin header, got %q", response.Header().Get("Vary"))
+	}
+}
+
 func TestRelayRejectsUnsupportedContentType(t *testing.T) {
 	handler := NewHandler(nil, Options{})
 	request := httptest.NewRequest(http.MethodPost, "https://app.example.test/debugbundle/browser", strings.NewReader(`{"batch":[]}`))

@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-29
+
+### Fixed
+
+- Added `OPTIONS /debugbundle/browser` preflight handling and matching CORS headers for explicitly allowed split-host browser relay traffic.
+
 ### Added
 
 - Initial Go SDK repository scaffold under `sdks/debugbundle-go`.
