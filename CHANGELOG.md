@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-31
+
+### Changed
+
+- Marked the first stable Go SDK release after the client, relay, and tagged-module smoke paths settled across the full support matrix.
+
 ## [0.1.2] - 2026-05-29
 
 ### Fixed
