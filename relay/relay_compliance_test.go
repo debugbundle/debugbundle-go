@@ -15,20 +15,20 @@ import (
 )
 
 type relayComplianceFixtureSuite struct {
-	Version int                     `json:"version"`
-	Cases   []relayComplianceCase   `json:"cases"`
+	Version int                   `json:"version"`
+	Cases   []relayComplianceCase `json:"cases"`
 }
 
 type relayComplianceCase struct {
-	ID                    string                               `json:"id"`
-	Kind                  string                               `json:"kind"`
-	RelayOptions          relayComplianceOptions               `json:"relayOptions"`
-	Request               relayComplianceRequest               `json:"request"`
-	Requests              []relayComplianceSequenceRequest     `json:"requests"`
-	Expected              relayComplianceExpected              `json:"expected"`
-	ExpectedEventFile     []map[string]any                     `json:"expectedEventFile"`
-	ExpectedForwardRequest *relayComplianceForwardRequest      `json:"expectedForwardRequest"`
-	ExpectedDeliveredMarker bool                               `json:"expectedDeliveredMarker"`
+	ID                      string                           `json:"id"`
+	Kind                    string                           `json:"kind"`
+	RelayOptions            relayComplianceOptions           `json:"relayOptions"`
+	Request                 relayComplianceRequest           `json:"request"`
+	Requests                []relayComplianceSequenceRequest `json:"requests"`
+	Expected                relayComplianceExpected          `json:"expected"`
+	ExpectedEventFile       []map[string]any                 `json:"expectedEventFile"`
+	ExpectedForwardRequest  *relayComplianceForwardRequest   `json:"expectedForwardRequest"`
+	ExpectedDeliveredMarker bool                             `json:"expectedDeliveredMarker"`
 }
 
 type relayComplianceOptions struct {

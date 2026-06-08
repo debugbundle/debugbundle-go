@@ -12,8 +12,8 @@ type Request struct {
 }
 
 type Response struct {
-	StatusCode int
-	RetryAfter time.Duration
+	StatusCode      int
+	RetryAfter      time.Duration
 	WrittenFilePath string
 }
 

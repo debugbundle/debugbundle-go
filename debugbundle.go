@@ -178,7 +178,7 @@ func (client *Client) CaptureRequest(ctx context.Context, request *http.Request,
 	if request == nil {
 		return
 	}
-	if !client.shouldCaptureRequestByPolicy(response.StatusCode) {
+	if !client.shouldCaptureRequestByPolicy(response.StatusCode, request.URL.String(), request.Method) {
 		return
 	}
 	if traceID := strings.TrimSpace(request.Header.Get("X-DebugBundle-Trace-Id")); traceID != "" && TraceIDFromContext(ctx) == "" {
@@ -519,11 +519,11 @@ func (client *Client) shouldCaptureLogByPolicy(level LogLevel) bool {
 	}
 }
 
-func (client *Client) shouldCaptureRequestByPolicy(statusCode int) bool {
+func (client *Client) shouldCaptureRequestByPolicy(statusCode int, requestPath string, httpMethod string) bool {
 	client.mu.Lock()
 	policy := client.capturePolicy
 	client.mu.Unlock()
-	return shouldCaptureRequestByPolicy(statusCode, policy)
+	return shouldCaptureRequestByPolicy(statusCode, requestPath, httpMethod, policy)
 }
 
 func (client *Client) shouldActivateHeavyProbe(ctx context.Context, label string) bool {

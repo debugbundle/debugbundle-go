@@ -1,24 +1,26 @@
 package debugbundle
 
-import "time"
+import (
+	"net/url"
+	"strings"
+	"time"
+)
 
 var balancedImmediateRequestStatuses = map[int]struct{}{408: {}, 423: {}, 424: {}, 425: {}, 429: {}}
 var investigativeImmediateRequestStatuses = map[int]struct{}{408: {}, 409: {}, 423: {}, 424: {}, 425: {}, 429: {}}
-var balancedAnomalyStatuses = map[int]struct{}{400: {}, 401: {}, 403: {}, 404: {}, 409: {}, 410: {}, 422: {}}
-var investigativeAnomalyStatuses = map[int]struct{}{400: {}, 401: {}, 403: {}, 404: {}, 409: {}, 410: {}, 422: {}}
 
-func shouldCaptureRequestByPolicy(statusCode int, policy CapturePolicy) bool {
+func shouldCaptureRequestByPolicy(statusCode int, requestPath string, httpMethod string, policy CapturePolicy) bool {
 	if statusCode == 0 {
 		return policy.CaptureRequestEvents == CaptureRequestEventsAll
 	}
-	if isImmediateRequestIncidentStatus(statusCode, policy) {
+	if isImmediateRequestIncidentStatus(statusCode, requestPath, httpMethod, policy) {
 		return true
 	}
 	switch policy.CaptureRequestEvents {
 	case CaptureRequestEventsOff:
 		return false
 	case CaptureRequestEventsFailuresOnly:
-		return isRequestAnomalyCandidateStatus(statusCode, policy.Preset)
+		return statusCode >= 500
 	case CaptureRequestEventsFiltered:
 		return false
 	case CaptureRequestEventsAll:
@@ -28,7 +30,7 @@ func shouldCaptureRequestByPolicy(statusCode int, policy CapturePolicy) bool {
 	}
 }
 
-func isImmediateRequestIncidentStatus(statusCode int, policy CapturePolicy) bool {
+func isImmediateRequestIncidentStatus(statusCode int, requestPath string, httpMethod string, policy CapturePolicy) bool {
 	if statusCode >= 500 {
 		return true
 	}
@@ -36,6 +38,9 @@ func isImmediateRequestIncidentStatus(statusCode int, policy CapturePolicy) bool
 		if candidate == statusCode {
 			return true
 		}
+	}
+	if matchesImmediateClientErrorPathRule(statusCode, requestPath, httpMethod, policy.ImmediateClientErrorPathRules) {
+		return true
 	}
 	switch policy.Preset {
 	case "investigative":
@@ -49,20 +54,52 @@ func isImmediateRequestIncidentStatus(statusCode int, policy CapturePolicy) bool
 	}
 }
 
-func isRequestAnomalyCandidateStatus(statusCode int, preset string) bool {
-	if statusCode < 400 || statusCode >= 500 {
+func matchesImmediateClientErrorPathRule(statusCode int, requestPath string, httpMethod string, rules []ImmediateClientErrorPathRule) bool {
+	if statusCode < 400 || statusCode > 499 || requestPath == "" {
 		return false
 	}
-	switch preset {
-	case "investigative":
-		_, ok := investigativeAnomalyStatuses[statusCode]
-		return ok
-	case "balanced":
-		_, ok := balancedAnomalyStatuses[statusCode]
-		return ok
-	default:
-		return false
+	normalizedPath := normalizeRequestPathForPolicy(requestPath)
+	normalizedMethod := strings.ToUpper(strings.TrimSpace(httpMethod))
+	for _, rule := range rules {
+		if rule.StatusCode != statusCode {
+			continue
+		}
+		if len(rule.Methods) > 0 {
+			matchesMethod := false
+			for _, method := range rule.Methods {
+				if method == normalizedMethod {
+					matchesMethod = true
+					break
+				}
+			}
+			if !matchesMethod {
+				continue
+			}
+		}
+		if strings.HasSuffix(rule.PathPattern, "*") {
+			if strings.HasPrefix(normalizedPath, strings.TrimSuffix(rule.PathPattern, "*")) {
+				return true
+			}
+			continue
+		}
+		if normalizedPath == rule.PathPattern {
+			return true
+		}
 	}
+	return false
+}
+
+func normalizeRequestPathForPolicy(value string) string {
+	parsed, err := url.Parse(value)
+	if err == nil && parsed.Path != "" {
+		return parsed.Path
+	}
+	withoutQuery := strings.SplitN(value, "?", 2)[0]
+	withoutFragment := strings.SplitN(withoutQuery, "#", 2)[0]
+	if strings.HasPrefix(withoutFragment, "/") && withoutFragment != "" {
+		return withoutFragment
+	}
+	return "/"
 }
 
 func (directive RemoteProbeDirective) Matches(label, service, environment string, now time.Time) bool {

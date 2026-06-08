@@ -33,17 +33,24 @@ const (
 type CaptureProbeEventsMode string
 
 const (
-	CaptureProbeEventsBufferOnly             CaptureProbeEventsMode = "buffer_only"
+	CaptureProbeEventsBufferOnly              CaptureProbeEventsMode = "buffer_only"
 	CaptureProbeEventsStandaloneWhenActivated CaptureProbeEventsMode = "standalone_when_activated"
 )
 
 type CapturePolicy struct {
-	Preset                      string
-	CaptureLogs                 CaptureLogsMode
-	CaptureRequestEvents        CaptureRequestEventsMode
-	CaptureBreadcrumbs          string
-	CaptureProbeEvents          CaptureProbeEventsMode
-	ImmediateClientErrorStatuses []int
+	Preset                        string
+	CaptureLogs                   CaptureLogsMode
+	CaptureRequestEvents          CaptureRequestEventsMode
+	CaptureBreadcrumbs            string
+	CaptureProbeEvents            CaptureProbeEventsMode
+	ImmediateClientErrorStatuses  []int
+	ImmediateClientErrorPathRules []ImmediateClientErrorPathRule
+}
+
+type ImmediateClientErrorPathRule struct {
+	StatusCode  int
+	PathPattern string
+	Methods     []string
 }
 
 type RemoteProbeDirective struct {
@@ -65,16 +72,32 @@ type RemoteConfigSnapshot struct {
 }
 
 type RemoteConfigRequest struct {
-	URL         string
+	URL          string
 	ProjectToken string
-	IfNoneMatch string
-	Timeout     time.Duration
+	IfNoneMatch  string
+	Timeout      time.Duration
 }
 
 type RemoteConfigResponse struct {
 	StatusCode int
 	Body       []byte
 	ETag       string
+}
+
+type remoteCapturePolicyPayload struct {
+	Preset                        string                                `json:"preset"`
+	CaptureLogs                   string                                `json:"capture_logs"`
+	CaptureRequestEvents          string                                `json:"capture_request_events"`
+	CaptureBreadcrumbs            string                                `json:"capture_breadcrumbs"`
+	CaptureProbeEvents            string                                `json:"capture_probe_events"`
+	ImmediateClientErrorStatuses  []int                                 `json:"immediate_client_error_statuses"`
+	ImmediateClientErrorPathRules []immediateClientErrorPathRulePayload `json:"immediate_client_error_path_rules"`
+}
+
+type immediateClientErrorPathRulePayload struct {
+	StatusCode  int      `json:"status_code"`
+	PathPattern string   `json:"path_pattern"`
+	Methods     []string `json:"methods"`
 }
 
 type RemoteConfigFetcher interface {
@@ -160,16 +183,9 @@ func parseRemoteConfig(body []byte, fallbackInterval time.Duration, now time.Tim
 			Environment  string `json:"environment"`
 			ExpiresAt    string `json:"expires_at"`
 		} `json:"active_probes"`
-		PollIntervalMS int `json:"poll_interval_ms"`
-		TriggerTokenKey string `json:"trigger_token_key"`
-		CapturePolicy *struct {
-			Preset                     string   `json:"preset"`
-			CaptureLogs                string   `json:"capture_logs"`
-			CaptureRequestEvents       string   `json:"capture_request_events"`
-			CaptureBreadcrumbs         string   `json:"capture_breadcrumbs"`
-			CaptureProbeEvents         string   `json:"capture_probe_events"`
-			ImmediateClientErrorStatuses []int `json:"immediate_client_error_statuses"`
-		} `json:"capture_policy"`
+		PollIntervalMS  int                         `json:"poll_interval_ms"`
+		TriggerTokenKey string                      `json:"trigger_token_key"`
+		CapturePolicy   *remoteCapturePolicyPayload `json:"capture_policy"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return RemoteConfigSnapshot{}, err
@@ -209,14 +225,7 @@ func parseRemoteConfig(body []byte, fallbackInterval time.Duration, now time.Tim
 	}, nil
 }
 
-func parseCapturePolicy(payload *struct {
-	Preset                     string   `json:"preset"`
-	CaptureLogs                string   `json:"capture_logs"`
-	CaptureRequestEvents       string   `json:"capture_request_events"`
-	CaptureBreadcrumbs         string   `json:"capture_breadcrumbs"`
-	CaptureProbeEvents         string   `json:"capture_probe_events"`
-	ImmediateClientErrorStatuses []int `json:"immediate_client_error_statuses"`
-}) (CapturePolicy, error) {
+func parseCapturePolicy(payload *remoteCapturePolicyPayload) (CapturePolicy, error) {
 	if payload == nil {
 		return balancedCapturePolicy(), nil
 	}
@@ -246,6 +255,11 @@ func parseCapturePolicy(payload *struct {
 		return CapturePolicy{}, errors.New("invalid capture_probe_events policy")
 	}
 	policy.ImmediateClientErrorStatuses = uniqueSortedClientStatuses(payload.ImmediateClientErrorStatuses)
+	pathRules, err := parseImmediateClientErrorPathRules(payload.ImmediateClientErrorPathRules)
+	if err != nil {
+		return CapturePolicy{}, err
+	}
+	policy.ImmediateClientErrorPathRules = pathRules
 	return policy, nil
 }
 
@@ -267,6 +281,50 @@ func uniqueSortedClientStatuses(values []int) []int {
 	}
 	sort.Ints(result)
 	return result
+}
+
+func parseImmediateClientErrorPathRules(values []immediateClientErrorPathRulePayload) ([]ImmediateClientErrorPathRule, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > 25 {
+		return nil, errors.New("invalid immediate_client_error_path_rules policy")
+	}
+	rules := make([]ImmediateClientErrorPathRule, 0, len(values))
+	for _, value := range values {
+		if value.StatusCode < 400 || value.StatusCode > 499 || !isValidCapturePolicyPathPattern(value.PathPattern) || len(value.Methods) > 7 {
+			return nil, errors.New("invalid immediate_client_error_path_rules policy")
+		}
+		methods := make([]string, 0, len(value.Methods))
+		seen := map[string]struct{}{}
+		for _, rawMethod := range value.Methods {
+			method := strings.ToUpper(strings.TrimSpace(rawMethod))
+			switch method {
+			case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+			default:
+				return nil, errors.New("invalid immediate_client_error_path_rules policy")
+			}
+			if _, exists := seen[method]; exists {
+				continue
+			}
+			seen[method] = struct{}{}
+			methods = append(methods, method)
+		}
+		rules = append(rules, ImmediateClientErrorPathRule{
+			StatusCode:  value.StatusCode,
+			PathPattern: value.PathPattern,
+			Methods:     methods,
+		})
+	}
+	return rules, nil
+}
+
+func isValidCapturePolicyPathPattern(value string) bool {
+	if value == "" || len(value) > 256 || !strings.HasPrefix(value, "/") || strings.Contains(value, "?") || strings.Contains(value, "#") {
+		return false
+	}
+	wildcardIndex := strings.Index(value, "*")
+	return wildcardIndex == -1 || wildcardIndex == len(value)-1
 }
 
 func normalizeRFC3339(value string) string {
