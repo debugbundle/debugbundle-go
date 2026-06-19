@@ -379,12 +379,16 @@ func (client *Client) capture(ctx context.Context, eventType string, payload map
 		return
 	}
 	mergedContext := client.mergedContextLocked(ctx, options...)
+	redactedContext := toObjectMap(client.redactor.Redact(mergedContext))
 	redactedPayload := toObjectMap(client.redactor.Redact(payload))
-	traceID := firstNonEmpty(TraceIDFromContext(ctx), stringValue(mergedContext["trace_id"]), stringValue(redactedPayload["trace_id"]))
-	correlation := client.correlationPayload(ctx, mergedContext, redactedPayload, traceID)
+	traceID := firstNonEmpty(TraceIDFromContext(ctx), stringValue(redactedContext["trace_id"]), stringValue(redactedPayload["trace_id"]))
+	correlation := client.correlationPayload(ctx, redactedContext, redactedPayload, traceID)
 	event := client.newEventEnvelope(eventType, time.Now().UTC(), redactedPayload)
 	if correlation != nil {
 		event.Correlation = correlation
+	}
+	if envelopeContext := eventContext(redactedContext); len(envelopeContext) > 0 {
+		event.Context = envelopeContext
 	}
 	fingerprint := client.fingerprintForEvent(eventType, redactedPayload)
 	if fingerprint != "" && !client.suppression.ShouldCapture(fingerprint, time.Now().UTC()) {
@@ -462,6 +466,19 @@ func (client *Client) mergedContextLocked(ctx context.Context, options ...EventO
 		merged[key] = value
 	}
 	return merged
+}
+
+func eventContext(mergedContext map[string]any) map[string]any {
+	result := map[string]any{}
+	for key, value := range mergedContext {
+		switch key {
+		case "request_id", "trace_id", "session_id", "user_id_hash":
+			continue
+		default:
+			result[key] = value
+		}
+	}
+	return result
 }
 
 func (client *Client) scheduleFlushLocked(immediate bool) {

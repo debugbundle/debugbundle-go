@@ -34,6 +34,7 @@ type EventEnvelope struct {
 	Service       ServiceDescriptor `json:"service"`
 	OccurredAt    string            `json:"occurred_at"`
 	Correlation   map[string]any    `json:"correlation,omitempty"`
+	Context       map[string]any    `json:"context,omitempty"`
 	Payload       map[string]any    `json:"payload"`
 }
 

@@ -85,6 +85,15 @@ func TestCaptureExceptionFlushesRedactedPayload(t *testing.T) {
 	if event.Correlation["trace_id"] != "trace-123" {
 		t.Fatalf("expected trace id to propagate, got %#v", event.Correlation["trace_id"])
 	}
+	if _, ok := event.Context["trace_id"]; ok {
+		t.Fatalf("expected trace id to stay in correlation, got context %#v", event.Context)
+	}
+	if event.Context["authorization"] != "[REDACTED]" {
+		t.Fatalf("expected envelope context authorization to be redacted, got %#v", event.Context["authorization"])
+	}
+	if event.Context["password"] != "[REDACTED]" {
+		t.Fatalf("expected envelope context password to be redacted, got %#v", event.Context["password"])
+	}
 	if event.EventType != "backend_exception" {
 		t.Fatalf("unexpected event type %q", event.EventType)
 	}
