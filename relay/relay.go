@@ -30,6 +30,7 @@ var acceptedEventTypes = map[string]struct{}{
 	"frontend_breadcrumb": {},
 	"request_event":       {},
 	"probe_event":         {},
+	"analytics_event":     {},
 }
 
 var errInvalidBrowserRelayPayload = errString("Invalid browser relay event payload.")
@@ -364,11 +365,8 @@ func sanitizeEvent(candidate map[string]any, options Options) (map[string]any, e
 		"payload":        payload,
 	}
 	stripSensitiveHeaders(payload)
-	if correlation, ok := sanitized["correlation"].(map[string]any); ok {
-		sanitized["correlation"] = keepCorrelationFields(correlation)
-	}
 	if correlation, ok := candidate["correlation"].(map[string]any); ok {
-		keptCorrelation := keepCorrelationFields(correlation)
+		keptCorrelation := keepCorrelationFields(correlation, eventType)
 		if len(keptCorrelation) > 0 {
 			sanitized["correlation"] = keptCorrelation
 		}
@@ -428,9 +426,13 @@ func markSpoolFileDelivered(path string) {
 	_ = file.Close()
 }
 
-func keepCorrelationFields(correlation map[string]any) map[string]any {
+func keepCorrelationFields(correlation map[string]any, eventType string) map[string]any {
 	kept := map[string]any{}
-	for _, key := range []string{"trace_id", "request_id", "session_id", "user_id_hash"} {
+	keys := []string{"trace_id", "request_id", "session_id", "user_id_hash"}
+	if eventType == "analytics_event" {
+		keys = []string{"session_id", "visitor_id_hash", "user_id_hash", "trace_id", "deploy_id"}
+	}
+	for _, key := range keys {
 		if value, ok := correlation[key]; ok {
 			if value == nil {
 				kept[key] = nil

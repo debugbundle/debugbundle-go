@@ -74,7 +74,7 @@ type relayComplianceForwardRequest struct {
 }
 
 func TestRelayComplianceHandlerFixtures(t *testing.T) {
-	for _, fixtureID := range []string{"valid-browser-batch", "mixed-valid-invalid-batch", "credential-smuggling-payload", "wrong-origin-request", "missing-origin-request", "oversized-body"} {
+	for _, fixtureID := range []string{"valid-browser-batch", "valid-analytics-event", "mixed-valid-invalid-batch", "credential-smuggling-payload", "wrong-origin-request", "missing-origin-request", "oversized-body"} {
 		fixture := relayComplianceFixture(t, fixtureID)
 		t.Run(fixture.ID, func(t *testing.T) {
 			options := relayOptionsFromFixture(fixture.RelayOptions)
