@@ -154,7 +154,7 @@ The buildable examples under [`examples/`](examples/) compile as part of `go tes
 This SDK ships as one Go module. Keep every imported subpackage on the same module version by pinning the root module once:
 
 ```bash
-go get github.com/debugbundle/debugbundle-go@v1.1.2
+go get github.com/debugbundle/debugbundle-go@v1.2.0
 ```
 
 Then import subpackages such as `debugbundlehttp`, `relay`, `debugbundleslog`, `debugbundlegin`, and `debugbundleecho` from that same module version. Do not mix snippets from different tags when copying examples between services.
@@ -245,7 +245,7 @@ make smoke
 For an already published tag, the release path can also rerun the same app-driven smoke against the published module install:
 
 ```bash
-make smoke-published VERSION=1.1.2
+make smoke-published VERSION=1.2.0
 ```
 
 ## Validation
