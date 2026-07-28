@@ -59,6 +59,7 @@ func TestPackageFacadeDelegatesToDefaultClient(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
+	//nolint:staticcheck // The facade contract explicitly accepts a nil context.
 	if err := Flush(nil); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -90,6 +91,7 @@ func TestPackageFacadeIsSafeWithoutDefaultClient(t *testing.T) {
 	SetContext("ignored", true)
 	Probe("ignored", nil)
 	ProbeLazy("ignored", func() any { return nil })
+	//nolint:staticcheck // The facade must remain safe when both client and context are absent.
 	if err := Flush(nil); err != nil {
 		t.Fatalf("flush without client: %v", err)
 	}

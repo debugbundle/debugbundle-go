@@ -61,6 +61,7 @@ func TestRequestTriggerValidationRejectsMalformedInputs(t *testing.T) {
 	if directives := resolveRequestTriggerDirectives(nil, "secret", now); directives != nil {
 		t.Fatal("expected nil request to degrade safely")
 	}
+	//nolint:staticcheck // Nil-context handling is an intentional SDK safety guarantee.
 	if extractRequestTriggerToken(nil) != "" || requestProbeDirectivesFromContext(nil) != nil {
 		t.Fatal("expected nil request context helpers to degrade safely")
 	}

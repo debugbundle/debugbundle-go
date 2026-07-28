@@ -634,30 +634,6 @@ func (client *Client) fingerprintForEvent(eventType string, payload map[string]a
 	}
 }
 
-func (client *Client) shouldCaptureLogByPolicy(level LogLevel) bool {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	switch client.capturePolicy.CaptureLogs {
-	case CaptureLogsOff:
-		return false
-	case CaptureLogsError:
-		return shouldCaptureLog(LevelError, level)
-	case CaptureLogsWarning:
-		return shouldCaptureLog(LevelWarning, level)
-	case CaptureLogsInfo:
-		return shouldCaptureLog(LevelInfo, level)
-	default:
-		return true
-	}
-}
-
-func (client *Client) shouldCaptureRequestByPolicy(statusCode int, requestPath string, httpMethod string) bool {
-	client.mu.Lock()
-	policy := client.capturePolicy
-	client.mu.Unlock()
-	return shouldCaptureRequestByPolicy(statusCode, requestPath, httpMethod, policy)
-}
-
 func (client *Client) shouldActivateHeavyProbe(ctx context.Context, label string) bool {
 	return len(client.matchingProbeDirectives(ctx, label, time.Now().UTC())) > 0
 }

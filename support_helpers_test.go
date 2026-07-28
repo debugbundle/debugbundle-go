@@ -18,6 +18,7 @@ func (alwaysFailReader) Read([]byte) (int, error) {
 }
 
 func TestContextHelpersPreserveValuesAndCorrelation(t *testing.T) {
+	//nolint:staticcheck // Nil-context handling is an intentional SDK safety guarantee.
 	if values := ContextValues(nil); len(values) != 0 {
 		t.Fatalf("expected nil context to be empty, got %#v", values)
 	}
@@ -43,6 +44,7 @@ func TestContextHelpersPreserveValuesAndCorrelation(t *testing.T) {
 	if TraceIDFromContext(fallback) != "trace-fallback" || RequestIDFromContext(fallback) != "request-fallback" {
 		t.Fatal("expected correlation lookup to use the shared context map")
 	}
+	//nolint:staticcheck // Nil-context handling is an intentional SDK safety guarantee.
 	if TraceIDFromContext(nil) != "" || RequestIDFromContext(nil) != "" {
 		t.Fatal("expected nil correlation contexts to degrade safely")
 	}
