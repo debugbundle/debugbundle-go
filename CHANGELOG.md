@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-28
+
+### Added
+
+- Added the universal `BeforeSend` event hook and canonical object wrapping for scalar/list probe values.
+- Added direct HTTP transport and remote-configuration coverage for acknowledgement and policy behavior.
+- Enforce at least 80% statement coverage for every publishable Go source file;
+  standalone example applications remain smoke fixtures rather than library
+  coverage inputs.
+
+### Fixed
+
+- Prevent event-ID entropy failures from escaping through `crypto/rand.Read`,
+  and preserve a failing Gin panic request as an error-status request event.
+- Reconcile connected ingestion acknowledgements per event, retaining only retryable rejections and withholding delivery health when no event was accepted.
+- Prevent redaction from panicking when application context contains a Go array; arrays are now traversed safely without applying slice-only pointer cycle detection.
+
 ## [1.2.0] - 2026-07-17
 
 ### Added

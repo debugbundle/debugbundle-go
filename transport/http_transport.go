@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -42,9 +43,14 @@ func (transport *HTTPTransport) Send(ctx context.Context, request Request) (Resp
 		return Response{}, err
 	}
 	defer func() { _ = httpResponse.Body.Close() }()
+	responseBody, readErr := io.ReadAll(io.LimitReader(httpResponse.Body, 1<<20))
+	if readErr != nil {
+		return Response{}, readErr
+	}
 	return Response{
 		StatusCode: httpResponse.StatusCode,
 		RetryAfter: boundedRetryAfter(httpResponse.Header.Get("Retry-After")),
+		Body:       responseBody,
 	}, nil
 }
 

@@ -6,6 +6,10 @@ SMOKE_GO_IMAGE ?= golang:1.26-bookworm
 test:
 	$(GO) test ./...
 
+.PHONY: coverage
+coverage:
+	GO="$(GO)" sh scripts/check-coverage.sh
+
 .PHONY: vet
 vet:
 	$(GO) vet ./...
@@ -35,7 +39,7 @@ smoke-published:
 smoke-module: smoke
 
 .PHONY: verify
-verify: test vet mod-check
+verify: test coverage vet mod-check
 
 .PHONY: verify-race
 verify-race: test-race vet mod-check

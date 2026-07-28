@@ -54,6 +54,31 @@ func TestGinMiddlewareCapturesRouteAndError(t *testing.T) {
 	}
 }
 
+func TestGinMiddlewareCapturesAndRethrowsPanics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := &recordingTransport{}
+	client := debugbundle.New(debugbundle.Config{ProjectToken: "dbundle_proj_test", Transport: recorder})
+	router := gin.New()
+	router.Use(Middleware(client))
+	router.GET("/panic", func(*gin.Context) {
+		panic("gin panic")
+	})
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/panic", nil))
+	}()
+	if recovered != "gin panic" {
+		t.Fatalf("expected original panic to be rethrown, got %#v", recovered)
+	}
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("flush panic events: %v", err)
+	}
+	if len(recorder.requests) != 1 || len(recorder.requests[0].Events) != 2 {
+		t.Fatalf("expected panic exception and request events, got %#v", recorder.requests)
+	}
+}
+
 type assertiveError string
 
 func (message assertiveError) Error() string {

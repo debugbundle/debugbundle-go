@@ -148,7 +148,11 @@ func main() {
 		mu.Unlock()
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusAccepted)
-		_, _ = io.WriteString(writer, `{"accepted":1,"rejected":0}`)
+		_ = json.NewEncoder(writer).Encode(map[string]any{
+			"accepted": len(payload.Events),
+			"rejected": 0,
+			"errors":   []any{},
+		})
 	})
 
 	mockServer := httptest.NewServer(mockMux)

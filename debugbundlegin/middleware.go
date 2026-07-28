@@ -21,6 +21,9 @@ func Middleware(client *debugbundle.Client) gin.HandlerFunc {
 				Route:      c.FullPath(),
 			}
 			if recovered := recover(); recovered != nil {
+				if response.StatusCode < 500 {
+					response.StatusCode = 500
+				}
 				client.CaptureException(ctx, fmt.Errorf("panic recovered: %v", recovered))
 				client.CaptureRequest(ctx, c.Request, response)
 				panic(recovered)

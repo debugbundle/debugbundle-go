@@ -17,13 +17,19 @@ import (
 )
 
 type recordingTransport struct {
-	requests []transport.Request
-	response transport.Response
-	err      error
+	requests  []transport.Request
+	response  transport.Response
+	responses []transport.Response
+	err       error
 }
 
 func (transport *recordingTransport) Send(_ context.Context, request transport.Request) (transport.Response, error) {
 	transport.requests = append(transport.requests, request)
+	if len(transport.responses) > 0 {
+		response := transport.responses[0]
+		transport.responses = transport.responses[1:]
+		return response, transport.err
+	}
 	return transport.response, transport.err
 }
 
@@ -130,6 +136,141 @@ func TestCaptureExceptionFlushesRedactedPayload(t *testing.T) {
 	}
 }
 
+func TestBeforeSendRunsAfterRedactionAndMutatesBeforeQueueing(t *testing.T) {
+	recorder := &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}
+	var observedPassword any
+	client := New(Config{
+		ProjectToken: "dbundle_proj_test",
+		Transport:    recorder,
+		LogLevel:     LevelInfo,
+		BeforeSend: func(event EventEnvelope) *EventEnvelope {
+			observedPassword = event.Context["password"]
+			event.Payload["message"] = "mutated"
+			event.Payload["level"] = string(LevelWarning)
+			if !validBeforeSendEvent(event) {
+				t.Fatalf("expected authored event to satisfy before-send schema: %#v", event)
+			}
+			return &event
+		},
+	})
+
+	client.CaptureMessage(
+		context.Background(),
+		"original",
+		WithEventContext(map[string]any{"password": "secret"}),
+	)
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("flush returned error: %v", err)
+	}
+
+	if observedPassword != "[REDACTED]" {
+		t.Fatalf("expected hook to observe redacted data, got %#v", observedPassword)
+	}
+	var event EventEnvelope
+	if err := json.Unmarshal(recorder.requests[0].Events[0], &event); err != nil {
+		t.Fatalf("decode event: %v", err)
+	}
+	if event.Payload["message"] != "mutated" {
+		t.Fatalf("expected before send mutation, got %#v", event.Payload)
+	}
+}
+
+func TestBeforeSendDropInvalidFailureAndPolicyOrderingAreSafe(t *testing.T) {
+	dropRecorder := &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}
+	dropCalls := 0
+	dropClient := New(Config{
+		ProjectToken: "dbundle_proj_test",
+		Transport:    dropRecorder,
+		LogLevel:     LevelInfo,
+		BeforeSend: func(event EventEnvelope) *EventEnvelope {
+			dropCalls++
+			return nil
+		},
+	})
+	dropClient.CaptureMessage(context.Background(), "drop")
+	_ = dropClient.Flush(context.Background())
+	if dropCalls != 1 || len(dropRecorder.requests) != 0 {
+		t.Fatalf("expected local hook drop, calls=%d requests=%d", dropCalls, len(dropRecorder.requests))
+	}
+
+	recorder := &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}
+	invalidClient := New(Config{
+		ProjectToken: "dbundle_proj_test",
+		Transport:    recorder,
+		LogLevel:     LevelInfo,
+		BeforeSend: func(event EventEnvelope) *EventEnvelope {
+			return &EventEnvelope{EventType: "log_event"}
+		},
+	})
+	invalidClient.CaptureLog(context.Background(), "preserve invalid", LevelError, nil)
+	_ = invalidClient.Flush(context.Background())
+
+	failingClient := New(Config{
+		ProjectToken: "dbundle_proj_test",
+		Transport:    recorder,
+		LogLevel:     LevelInfo,
+		BeforeSend: func(event EventEnvelope) *EventEnvelope {
+			panic("hook failed")
+		},
+	})
+	failingClient.CaptureLog(context.Background(), "preserve failure", LevelError, nil)
+	_ = failingClient.Flush(context.Background())
+
+	if len(recorder.requests) != 2 {
+		t.Fatalf("expected invalid and panicking hooks to preserve events, got %d", len(recorder.requests))
+	}
+	for index, expected := range []string{"preserve invalid", "preserve failure"} {
+		var event EventEnvelope
+		if err := json.Unmarshal(recorder.requests[index].Events[0], &event); err != nil {
+			t.Fatalf("decode preserved event: %v", err)
+		}
+		if event.Payload["message"] != expected {
+			t.Fatalf("expected %q, got %#v", expected, event.Payload["message"])
+		}
+	}
+
+	policyCalls := 0
+	policyClient := New(Config{
+		ProjectToken: "dbundle_proj_test",
+		Transport:    recorder,
+		RemoteConfigFetcher: &fakeRemoteConfigFetcher{responses: []RemoteConfigResponse{{
+			StatusCode: http.StatusOK,
+			Body: []byte(`{
+				"probes_enabled":true,
+				"remote_probes_enabled":false,
+				"capture_policy":{
+					"preset":"minimal",
+					"capture_logs":"off",
+					"capture_request_events":"failures_only",
+					"capture_breadcrumbs":"local_only",
+					"capture_probe_events":"buffer_only",
+					"immediate_client_error_statuses":[]
+				}
+			}`),
+		}}},
+		BeforeSend: func(event EventEnvelope) *EventEnvelope {
+			policyCalls++
+			return &event
+		},
+	})
+	policyClient.CaptureLog(context.Background(), "policy drop", LevelError, nil)
+	_ = policyClient.Flush(context.Background())
+	if policyCalls != 1 || len(recorder.requests) != 2 {
+		t.Fatalf("expected hook before policy drop, calls=%d requests=%d", policyCalls, len(recorder.requests))
+	}
+}
+
+func TestProbeLazyCallbackPanicNeverEscapes(t *testing.T) {
+	client := New(Config{
+		ProjectToken: "dbundle_proj_test",
+		Transport:    &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}},
+	})
+
+	client.ProbeLazy(context.Background(), "unsafe", func() any {
+		panic("callback failed")
+	})
+}
+
 func TestCaptureExceptionCanDisableProbeFlushOnError(t *testing.T) {
 	flushOnError := false
 	recorder := &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}
@@ -227,6 +368,105 @@ func TestRetryableFlushWithoutRetryAfterUsesDefaultBackoff(t *testing.T) {
 	}
 	if status != StatusDegraded || failures != 1 {
 		t.Fatalf("expected degraded status and one failure, got status=%q failures=%d", status, failures)
+	}
+}
+
+func TestFlushRetriesOnlyIndexedRetryableRejections(t *testing.T) {
+	recorder := &recordingTransport{responses: []transport.Response{
+		{
+			StatusCode: http.StatusAccepted,
+			RetryAfter: time.Millisecond,
+			Body: json.RawMessage(
+				`{"accepted":1,"rejected":1,"errors":[{"index":1,"reason":"rate_limited"}]}`,
+			),
+		},
+		{
+			StatusCode: http.StatusAccepted,
+			Body:       json.RawMessage(`{"accepted":1,"rejected":0,"errors":[]}`),
+		},
+	}}
+	client := New(Config{ProjectToken: "dbundle_proj_test", Transport: recorder})
+	client.CaptureMessage(context.Background(), "accepted")
+	client.CaptureMessage(context.Background(), "retry")
+
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("first flush returned error: %v", err)
+	}
+	if client.Status() != StatusDegraded || client.LastEventAt() == nil {
+		t.Fatalf("expected partial acceptance to record delivery and retain retry state")
+	}
+	client.mu.Lock()
+	client.retryUntil = time.Time{}
+	client.mu.Unlock()
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("second flush returned error: %v", err)
+	}
+
+	if len(recorder.requests) != 2 || len(recorder.requests[1].Events) != 1 {
+		t.Fatalf("expected only rejected index to retry, got %#v", recorder.requests)
+	}
+	var event EventEnvelope
+	if err := json.Unmarshal(recorder.requests[1].Events[0], &event); err != nil {
+		t.Fatalf("decode retried event: %v", err)
+	}
+	if event.Payload["message"] != "retry" {
+		t.Fatalf("expected retry event only, got %#v", event.Payload)
+	}
+}
+
+func TestFlushDoesNotReportAllTerminalRejectionsAsDelivered(t *testing.T) {
+	recorder := &recordingTransport{response: transport.Response{
+		StatusCode: http.StatusAccepted,
+		Body: json.RawMessage(
+			`{"accepted":0,"rejected":1,"errors":[{"index":0,"reason":"capture_policy_rejected"}]}`,
+		),
+	}}
+	client := New(Config{ProjectToken: "dbundle_proj_test", Transport: recorder})
+	client.CaptureMessage(context.Background(), "terminal")
+
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("flush returned error: %v", err)
+	}
+	if client.Status() != StatusDisconnected || client.LastEventAt() != nil {
+		t.Fatalf("expected all-rejected delivery to remain unsuccessful")
+	}
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("second flush returned error: %v", err)
+	}
+	if len(recorder.requests) != 1 {
+		t.Fatalf("expected terminal rejection to be removed, got %d requests", len(recorder.requests))
+	}
+}
+
+func TestFlushRetainsFullBatchAfterInconsistentAcknowledgement(t *testing.T) {
+	recorder := &recordingTransport{responses: []transport.Response{
+		{
+			StatusCode: http.StatusAccepted,
+			Body:       json.RawMessage(`{"accepted":1,"rejected":0,"errors":[]}`),
+		},
+		{
+			StatusCode: http.StatusAccepted,
+			Body:       json.RawMessage(`{"accepted":2,"rejected":0,"errors":[]}`),
+		},
+	}}
+	client := New(Config{ProjectToken: "dbundle_proj_test", Transport: recorder})
+	client.CaptureMessage(context.Background(), "first")
+	client.CaptureMessage(context.Background(), "second")
+
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("first flush returned error: %v", err)
+	}
+	if client.Status() != StatusDegraded || client.LastEventAt() != nil {
+		t.Fatalf("expected malformed acknowledgement to retain unsuccessful state")
+	}
+	client.mu.Lock()
+	client.retryUntil = time.Time{}
+	client.mu.Unlock()
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("second flush returned error: %v", err)
+	}
+	if len(recorder.requests) != 2 || len(recorder.requests[1].Events) != 2 {
+		t.Fatalf("expected the full batch to retry, got %#v", recorder.requests)
 	}
 }
 

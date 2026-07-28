@@ -4,6 +4,7 @@ import (
 	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"runtime"
@@ -150,7 +151,7 @@ func firstNonEmpty(values ...string) string {
 
 func newEventID() string {
 	bytes := make([]byte, 16)
-	if _, err := cryptorand.Read(bytes); err != nil {
+	if _, err := io.ReadFull(cryptorand.Reader, bytes); err != nil {
 		fallback := fmt.Sprintf("%d:%d", time.Now().UnixNano(), eventIDFallbackCount.Add(1))
 		sum := sha256.Sum256([]byte(fallback))
 		copy(bytes, sum[:16])

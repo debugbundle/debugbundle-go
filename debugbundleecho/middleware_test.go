@@ -52,3 +52,29 @@ func TestEchoMiddlewareCapturesRouteAndError(t *testing.T) {
 		t.Fatalf("expected propagated trace id, got %#v", requestEvent.Correlation["trace_id"])
 	}
 }
+
+func TestEchoMiddlewareCapturesAndRethrowsPanics(t *testing.T) {
+	e := echo.New()
+	recorder := &recordingTransport{}
+	client := debugbundle.New(debugbundle.Config{ProjectToken: "dbundle_proj_test", Transport: recorder})
+	echoContext := e.NewContext(httptest.NewRequest(http.MethodGet, "/panic", nil), httptest.NewRecorder())
+	echoContext.SetPath("/panic")
+	handler := Middleware(client)(func(echo.Context) error {
+		panic("echo panic")
+	})
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = handler(echoContext)
+	}()
+	if recovered != "echo panic" {
+		t.Fatalf("expected original panic to be rethrown, got %#v", recovered)
+	}
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("flush panic events: %v", err)
+	}
+	if len(recorder.requests) != 1 || len(recorder.requests[0].Events) != 2 {
+		t.Fatalf("expected panic exception and request events, got %#v", recorder.requests)
+	}
+}

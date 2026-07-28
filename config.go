@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	Version              = "1.2.0"
+	Version              = "1.3.0"
 	defaultEndpoint      = "https://api.debugbundle.com/v1/events"
 	defaultLocalDir      = ".debugbundle/local/events"
 	defaultSpoolDir      = ".debugbundle/local/browser-relay-spool"
@@ -52,6 +52,7 @@ type Config struct {
 	ProbeFlushOnError       *bool
 	Transport               transport.Sender
 	RemoteConfigFetcher     RemoteConfigFetcher
+	BeforeSend              BeforeSendFunc
 }
 
 type resolvedConfig struct {
@@ -75,6 +76,7 @@ type resolvedConfig struct {
 	probeFlushOnError       bool
 	transport               transport.Sender
 	remoteConfigFetcher     RemoteConfigFetcher
+	beforeSend              BeforeSendFunc
 }
 
 func (config Config) resolve() resolvedConfig {
@@ -99,6 +101,7 @@ func (config Config) resolve() resolvedConfig {
 		probeFlushOnError:       true,
 		transport:               config.Transport,
 		remoteConfigFetcher:     config.RemoteConfigFetcher,
+		beforeSend:              config.BeforeSend,
 	}
 
 	if config.Enabled != nil {

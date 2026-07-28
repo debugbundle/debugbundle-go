@@ -15,6 +15,8 @@ type Response struct {
 	StatusCode      int
 	RetryAfter      time.Duration
 	WrittenFilePath string
+	// Body is optional so existing custom transports retain status-only success semantics.
+	Body json.RawMessage
 }
 
 type Sender interface {

@@ -110,12 +110,14 @@ func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string
 	case reflect.Float32, reflect.Float64:
 		return value.Float()
 	case reflect.Slice, reflect.Array:
-		identifier := visitKey{kind: value.Kind(), ptr: value.Pointer()}
-		if identifier.ptr != 0 {
-			if _, exists := visited[identifier]; exists {
-				return "[Circular]"
+		if value.Kind() == reflect.Slice {
+			identifier := visitKey{kind: value.Kind(), ptr: value.Pointer()}
+			if identifier.ptr != 0 {
+				if _, exists := visited[identifier]; exists {
+					return "[Circular]"
+				}
+				visited[identifier] = struct{}{}
 			}
-			visited[identifier] = struct{}{}
 		}
 		limit := value.Len()
 		if limit > redactor.maxItems {
