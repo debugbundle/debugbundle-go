@@ -153,7 +153,11 @@ func TestBoundedInputRetainsPlainTypedValuesAndRejectsUnscannableGraphs(t *testi
 	route := "/checkout"
 	for _, input := range []any{
 		nil, &route, []int{1, 2}, [2]string{"safe", "route"},
-		evidence{Route: route, Ignored: strings.Repeat("x", maxTelemetryBytes+1)},
+		evidence{
+			Route:   route,
+			Ignored: strings.Repeat("x", maxTelemetryBytes+1),
+			hidden:  strings.Repeat("x", maxTelemetryBytes+1),
+		},
 		json.RawMessage(`{"password":"secret","route":"/checkout"}`),
 	} {
 		if _, err := ProtectTelemetry(input, nil); err != nil {
