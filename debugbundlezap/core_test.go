@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
-	"github.com/debugbundle/debugbundle-go/transport"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	"github.com/debugbundle/debugbundle-go/v2/transport"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )

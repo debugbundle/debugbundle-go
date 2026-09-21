@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-21
+
+- Publish the v2 module path `github.com/debugbundle/debugbundle-go/v2` with a native `telemetry-privacy-v1` baseline for context, hooks, buffering, transport, and browser relay. Mandatory known-secret protection cannot be disabled by custom field rules. Existing v1 imports and tags remain unchanged; update imports and review replacement-style `RedactFields` rules when adopting v2.
+
 ## [1.4.0] - 2026-09-12
 
 ### Changed

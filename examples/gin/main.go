@@ -6,8 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
-	"github.com/debugbundle/debugbundle-go/debugbundlegin"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	"github.com/debugbundle/debugbundle-go/v2/debugbundlegin"
 )
 
 func main() {

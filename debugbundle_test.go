@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/debugbundle/debugbundle-go/transport"
+	"github.com/debugbundle/debugbundle-go/v2/transport"
 )
 
 type recordingTransport struct {

@@ -1,4 +1,4 @@
-module github.com/debugbundle/debugbundle-go
+module github.com/debugbundle/debugbundle-go/v2
 
 go 1.21
 

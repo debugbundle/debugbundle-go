@@ -7,7 +7,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
 )
 
 func Middleware(client *debugbundle.Client) echo.MiddlewareFunc {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"time"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
 	"go.uber.org/zap/zapcore"
 )
 

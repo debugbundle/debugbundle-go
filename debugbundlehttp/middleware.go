@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
-	"github.com/debugbundle/debugbundle-go/relay"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	"github.com/debugbundle/debugbundle-go/v2/relay"
 )
 
 type Options struct {

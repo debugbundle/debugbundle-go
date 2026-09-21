@@ -1,6 +1,6 @@
 GO ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
 GOLANGCI_LINT ?= golangci-lint
-SMOKE_GO_IMAGE ?= golang:1.26-bookworm
+SMOKE_GO_IMAGE ?= golang:1.27-bookworm
 
 .PHONY: test
 test:

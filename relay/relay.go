@@ -13,8 +13,9 @@ import (
 	"sync"
 	"time"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
-	"github.com/debugbundle/debugbundle-go/transport"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	"github.com/debugbundle/debugbundle-go/v2/redaction"
+	"github.com/debugbundle/debugbundle-go/v2/transport"
 )
 
 const (
@@ -323,6 +324,9 @@ func setCORSHeaders(writer http.ResponseWriter, origin string) {
 }
 
 func sanitizeEvent(candidate map[string]any, options Options) (map[string]any, error) {
+	if !redaction.SafeEventIdentity(candidate, nil) {
+		return nil, errInvalidBrowserRelayPayload
+	}
 	schemaVersion, ok := nonEmptyString(candidate["schema_version"])
 	if !ok {
 		return nil, errInvalidBrowserRelayPayload
@@ -365,6 +369,24 @@ func sanitizeEvent(candidate map[string]any, options Options) (map[string]any, e
 		"payload":        payload,
 	}
 	stripSensitiveHeaders(payload)
+	protected, err := redaction.ProtectTelemetry(map[string]any{"payload": payload, "service": service}, nil)
+	if err != nil {
+		return nil, errInvalidBrowserRelayPayload
+	}
+	protectedFields, ok := protected.(map[string]any)
+	if !ok {
+		return nil, errInvalidBrowserRelayPayload
+	}
+	protectedPayload, ok := protectedFields["payload"].(map[string]any)
+	if !ok {
+		return nil, errInvalidBrowserRelayPayload
+	}
+	protectedService, ok := protectedFields["service"].(map[string]any)
+	if !ok {
+		return nil, errInvalidBrowserRelayPayload
+	}
+	sanitized["payload"] = protectedPayload
+	sanitized["service"] = protectedService
 	if correlation, ok := candidate["correlation"].(map[string]any); ok {
 		keptCorrelation := keepCorrelationFields(correlation, eventType)
 		if len(keptCorrelation) > 0 {

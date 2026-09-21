@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )

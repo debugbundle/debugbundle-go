@@ -4,9 +4,13 @@ DebugBundle for Go captures backend exceptions, request failures, structured log
 
 ## Installation
 
+This source tree is the protected v2 candidate. After the v2 tag is published, install it with:
+
 ```bash
-go get github.com/debugbundle/debugbundle-go@latest
+go get github.com/debugbundle/debugbundle-go/v2@v2.0.0
 ```
+
+Until then, the published v1 module remains at `github.com/debugbundle/debugbundle-go`; it does not gain the new pre-transmission privacy boundary merely because the server is upgraded.
 
 The root module ships the core client plus optional subpackages for `net/http`, Gin, Echo, `log/slog`, zap, zerolog, and the browser relay handler.
 
@@ -37,7 +41,7 @@ Capture-policy fields are server-owned and are not accepted in local SDK config.
 | `SampleRate` | `1.0` | Per-event sample rate. |
 | `LogLevel` | `warning` | Minimum captured log severity. |
 | `RequestTimeout` | `5s` | HTTP timeout for connected transport and remote config fetches. |
-| `RedactFields` | built-in sensitive field list | Additional field names to redact before buffering or transport. |
+| `RedactFields` | mandatory baseline plus `[]` additional fields | Additional field names to redact before buffering or transport; these cannot replace the mandatory baseline in v2. |
 | `MaxProbeLabels` | `50` | Max distinct probe labels held in memory. |
 | `MaxProbeEntriesPerLabel` | `10` | Ring-buffer size per probe label. |
 | `ProbeFlushOnError` | `true` | Flush probe buffers with exceptions. |
@@ -58,9 +62,9 @@ import (
 	"net/http"
 	"os"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
-	"github.com/debugbundle/debugbundle-go/debugbundlehttp"
-	"github.com/debugbundle/debugbundle-go/debugbundleslog"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	"github.com/debugbundle/debugbundle-go/v2/debugbundlehttp"
+	"github.com/debugbundle/debugbundle-go/v2/debugbundleslog"
 )
 
 func main() {
@@ -154,10 +158,12 @@ The buildable examples under [`examples/`](examples/) compile as part of `go tes
 This SDK ships as one Go module. Keep every imported subpackage on the same module version by pinning the root module once:
 
 ```bash
-go get github.com/debugbundle/debugbundle-go@v1.4.0
+go get github.com/debugbundle/debugbundle-go/v2@v2.0.0
 ```
 
 Then import subpackages such as `debugbundlehttp`, `relay`, `debugbundleslog`, `debugbundlegin`, and `debugbundleecho` from that same module version. Do not mix snippets from different tags when copying examples between services.
+
+For an existing v1 service, change each `github.com/debugbundle/debugbundle-go` import to `github.com/debugbundle/debugbundle-go/v2`, then update the requirement to `v2.0.0`. Review any `RedactFields` configuration: v1 replacement-style rules become additive in v2. Keep the v1 module pinned until you have tested the upgraded app; the v1 import path and released tags remain available to existing installations.
 
 ## Browser Relay
 
@@ -245,7 +251,7 @@ make smoke
 For an already published tag, the release path can also rerun the same app-driven smoke against the published module install:
 
 ```bash
-make smoke-published VERSION=1.4.0
+make smoke-published VERSION=2.0.0
 ```
 
 ## Validation

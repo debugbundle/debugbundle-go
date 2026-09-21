@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
 	"github.com/rs/zerolog"
 )
 

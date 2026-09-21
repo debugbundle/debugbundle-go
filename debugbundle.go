@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/debugbundle/debugbundle-go/redaction"
-	"github.com/debugbundle/debugbundle-go/transport"
+	"github.com/debugbundle/debugbundle-go/v2/redaction"
+	"github.com/debugbundle/debugbundle-go/v2/transport"
 )
 
 type Client struct {
@@ -197,7 +197,15 @@ func (client *Client) SetContext(key string, value any) {
 		delete(client.persistent, key)
 		return
 	}
-	client.persistent[key] = value
+	protected, err := redaction.ProtectTelemetry(map[string]any{key: value}, client.config.redactFields)
+	if err != nil {
+		return
+	}
+	fields, ok := protected.(map[string]any)
+	if !ok {
+		return
+	}
+	client.persistent[key] = fields[key]
 }
 
 func (client *Client) Probe(ctx context.Context, label string, data any, options ...ProbeOption) {
@@ -226,7 +234,19 @@ func (client *Client) recordProbe(ctx context.Context, label string, data any, o
 	if strings.TrimSpace(label) == "" {
 		return
 	}
-	redactedData := toObjectMap(client.redactor.Redact(data))
+	protectedData, err := redaction.ProtectTelemetry(client.redactor.Redact(data), client.config.redactFields)
+	if err != nil {
+		return
+	}
+	redactedData := toObjectMap(protectedData)
+	protectedLabel, err := redaction.ProtectTelemetry(label, client.config.redactFields)
+	if err != nil {
+		return
+	}
+	label, ok := protectedLabel.(string)
+	if !ok {
+		return
+	}
 	now := time.Now().UTC()
 	standaloneEvents := make([]map[string]any, 0)
 	emitStandalone := false
@@ -293,10 +313,18 @@ func (client *Client) Flush(ctx context.Context) error {
 			"last_seen":        aggregate.LastSeenAt.Format(time.RFC3339Nano),
 			"window_seconds":   maxInt64(1, aggregate.WindowMillis/1000),
 		})
-		prepared, diagnostic := applyBeforeSend(event, client.config.beforeSend)
+		protected := client.protectEvent(event)
+		if protected == nil {
+			continue
+		}
+		prepared, diagnostic := applyBeforeSend(*protected, client.config.beforeSend)
 		if diagnostic != "" {
 			client.recordDiagnostic(diagnostic)
 		}
+		if prepared == nil {
+			continue
+		}
+		prepared = client.protectEvent(*prepared)
 		if prepared == nil {
 			continue
 		}
@@ -440,10 +468,18 @@ func (client *Client) capture(ctx context.Context, eventType string, payload map
 	}
 	client.mu.Unlock()
 
-	prepared, diagnostic := applyBeforeSend(event, client.config.beforeSend)
+	protected := client.protectEvent(event)
+	if protected == nil {
+		return
+	}
+	prepared, diagnostic := applyBeforeSend(*protected, client.config.beforeSend)
 	if diagnostic != "" {
 		client.recordDiagnostic(diagnostic)
 	}
+	if prepared == nil {
+		return
+	}
+	prepared = client.protectEvent(*prepared)
 	if prepared == nil {
 		return
 	}

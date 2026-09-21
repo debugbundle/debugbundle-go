@@ -6,12 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/debugbundle/debugbundle-go/redaction"
-	"github.com/debugbundle/debugbundle-go/transport"
+	"github.com/debugbundle/debugbundle-go/v2/redaction"
+	"github.com/debugbundle/debugbundle-go/v2/transport"
 )
 
 const (
-	Version              = "1.4.0"
+	Version              = "2.0.0"
 	defaultEndpoint      = "https://api.debugbundle.com/v1/events"
 	defaultLocalDir      = ".debugbundle/local/events"
 	defaultSpoolDir      = ".debugbundle/local/browser-relay-spool"

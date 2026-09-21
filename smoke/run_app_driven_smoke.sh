@@ -4,7 +4,7 @@ set -eu
 
 SOURCE="local"
 VERSION=""
-MODULE_PATH="github.com/debugbundle/debugbundle-go"
+MODULE_PATH="github.com/debugbundle/debugbundle-go/v2"
 REPO_ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 
 while [ "$#" -gt 0 ]; do
@@ -24,7 +24,7 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-REQUIRE_VERSION="v0.0.0"
+REQUIRE_VERSION="v2.0.0"
 REPLACE_DIRECTIVE="replace ${MODULE_PATH} => ${REPO_ROOT}"
 
 case "$SOURCE" in
@@ -83,9 +83,9 @@ import (
 	"strings"
 	"sync"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
-	"github.com/debugbundle/debugbundle-go/debugbundlehttp"
-	"github.com/debugbundle/debugbundle-go/relay"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	"github.com/debugbundle/debugbundle-go/v2/debugbundlehttp"
+	"github.com/debugbundle/debugbundle-go/v2/relay"
 )
 
 type ingestionBatch struct {
@@ -168,7 +168,7 @@ func main() {
 
 	appMux := http.NewServeMux()
 	appMux.HandleFunc("/checkout", func(writer http.ResponseWriter, request *http.Request) {
-		client.CaptureException(request.Context(), errors.New("go smoke backend exception"))
+		client.CaptureException(request.Context(), errors.New("go smoke backend exception password=PACKED_SMOKE_SECRET"))
 		http.Error(writer, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	})
 	appMux.Handle("/debugbundle/browser", debugbundlehttp.RelayHandler(client, relay.Options{}))
@@ -271,6 +271,10 @@ func main() {
 	)
 
 	for _, batch := range captured {
+		encoded, err := json.Marshal(batch.Events)
+		if err != nil || strings.Contains(string(encoded), "PACKED_SMOKE_SECRET") {
+			failf("installed SDK privacy canary failed")
+		}
 		if batch.Authorization != "Bearer "+projectToken {
 			failf("expected ingestion auth header %q, got %q", "Bearer "+projectToken, batch.Authorization)
 		}

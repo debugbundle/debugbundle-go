@@ -10,8 +10,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
-	"github.com/debugbundle/debugbundle-go/transport"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	"github.com/debugbundle/debugbundle-go/v2/transport"
 )
 
 type recordingTransport struct {

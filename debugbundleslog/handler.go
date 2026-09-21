@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	debugbundle "github.com/debugbundle/debugbundle-go"
+	debugbundle "github.com/debugbundle/debugbundle-go/v2"
 )
 
 type Handler struct {
