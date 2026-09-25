@@ -154,7 +154,7 @@ func TestHookGrowthDropsOverflowWithoutRestoringPrivateOriginals(t *testing.T) {
 			}
 			return &event
 		}})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	for index := 0; index < 100; index++ {
 		client.CaptureLog(context.Background(), fmt.Sprintf("private tenant detail %d", index), LevelError, nil)
 	}
@@ -194,7 +194,7 @@ func (errorValue *countedError) Error() string {
 func TestAllErrorFullQueueRejectsBeforeExceptionRendering(t *testing.T) {
 	client := New(Config{ProjectToken: "dbundle_proj_test", BatchSize: 20_000,
 		FlushInterval: time.Hour, Transport: &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	for index := 0; index < maxPendingEvents; index++ {
 		client.CaptureLog(context.Background(), fmt.Sprintf("unique error %d", index), LevelError, nil)
 	}
@@ -220,7 +220,7 @@ func TestAllErrorFullQueueRejectsBeforeExceptionRendering(t *testing.T) {
 func TestFullWarningQueueRetainsRequestFailureAndException(t *testing.T) {
 	client := New(Config{ProjectToken: "dbundle_proj_test", BatchSize: 20_000,
 		FlushInterval: time.Hour, Transport: &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	for index := 0; index < maxPendingEvents; index++ {
 		client.CaptureLog(context.Background(), fmt.Sprintf("unique warning %d", index), LevelWarning, nil)
 	}
@@ -250,7 +250,7 @@ func TestRateLimitedWarningBatchRestoresExceptionPriority(t *testing.T) {
 	client := New(Config{ProjectToken: "dbundle_proj_test", BatchSize: 20_000,
 		FlushInterval: time.Hour, RequestTimeout: time.Minute,
 		Transport: &recordingTransport{response: transport.Response{StatusCode: http.StatusTooManyRequests}}})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	for index := 0; index < maxPendingEvents; index++ {
 		client.CaptureLog(context.Background(), fmt.Sprintf("unique warning %d", index), LevelWarning, nil)
 	}
@@ -278,7 +278,7 @@ func TestRateLimitedWarningBatchRestoresExceptionPriority(t *testing.T) {
 func TestCaptureCallersNeverWaitForAnOccupiedStateLock(t *testing.T) {
 	client := New(Config{ProjectToken: "dbundle_proj_test",
 		Transport: &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	client.mu.Lock()
 	finished := make(chan struct{}, 3)
 	go func() {
@@ -315,7 +315,7 @@ func TestExceptionRendererCannotHoldTheCaptureCaller(t *testing.T) {
 	errorValue := &hostileError{entered: make(chan struct{}), release: make(chan struct{})}
 	client := New(Config{ProjectToken: "dbundle_proj_test",
 		Transport: &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	finished := make(chan struct{})
 	go func() {
 		client.CaptureException(context.Background(), errorValue)
@@ -360,7 +360,7 @@ func TestConstructorDoesNotWaitForRemoteConfiguration(t *testing.T) {
 	}
 	select {
 	case client := <-created:
-		client.Close()
+		_ = client.Close()
 	case <-time.After(250 * time.Millisecond):
 		close(fetcher.release)
 		t.Fatal("constructor waited for remote configuration")
@@ -380,7 +380,7 @@ func TestFilteredInfoBurstDoesNotInvokeHookOrRetainEvents(t *testing.T) {
 			return &event
 		},
 	})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	for index := 0; index < 10_000; index++ {
 		client.CaptureLog(context.Background(), "filtered", LevelInfo, map[string]any{"index": index})
 	}
@@ -399,7 +399,7 @@ func TestUniqueEventBurstHasFiniteRetainedCapacity(t *testing.T) {
 		FlushInterval: time.Hour,
 		Transport:     &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}},
 	})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	for index := 0; index < 5_000; index++ {
 		client.CaptureMessage(context.Background(), fmt.Sprintf("unique warning %d", index))
 	}
@@ -415,17 +415,27 @@ func TestQueuePressureProducesOneBoundedAggregateAfterTheFullBatch(t *testing.T)
 	recorder := &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}
 	client := New(Config{ProjectToken: "dbundle_proj_test", BatchSize: 20_000,
 		FlushInterval: time.Hour, RequestTimeout: time.Minute, Transport: recorder})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	for index := 0; index < 1_100; index++ {
 		client.CaptureMessage(context.Background(), fmt.Sprintf("pressure warning %d", index))
 	}
-	_ = client.Flush(context.Background())
-	_ = client.Flush(context.Background())
-	if len(recorder.requests) != 2 || len(recorder.requests[1].Events) != 1 {
-		t.Fatalf("expected one aggregate after the full batch, got %#v", recorder.requests)
+	var requests []transport.Request
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_ = client.Flush(context.Background())
+		client.sendMu.Lock()
+		requests = append([]transport.Request(nil), recorder.requests...)
+		client.sendMu.Unlock()
+		if len(requests) >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(requests) != 2 || len(requests[1].Events) != 1 {
+		t.Fatalf("expected one aggregate after the full batch, got %d batches", len(requests))
 	}
 	var aggregate EventEnvelope
-	if err := json.Unmarshal(recorder.requests[1].Events[0], &aggregate); err != nil {
+	if err := json.Unmarshal(requests[1].Events[0], &aggregate); err != nil {
 		t.Fatalf("decode pressure aggregate: %v", err)
 	}
 	if aggregate.EventType != "error_suppressed" || aggregate.Payload["suppressed_count"] != float64(100) {
@@ -458,7 +468,7 @@ func (sender *heldSender) Send(_ context.Context, _ transport.Request) (transpor
 func TestHeldSenderHasOneInFlightBatchAndCannotGrowTheQueue(t *testing.T) {
 	sender := &heldSender{entered: make(chan struct{}), release: make(chan struct{})}
 	client := New(Config{ProjectToken: "dbundle_proj_test", BatchSize: 1, Transport: sender})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	client.CaptureMessage(context.Background(), "first")
 	select {
 	case <-sender.entered:

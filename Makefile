@@ -1,5 +1,6 @@
 GO ?= $(shell command -v go 2>/dev/null || echo /usr/local/go/bin/go)
 GOLANGCI_LINT ?= golangci-lint
+GOLANGCI_LINT_IMAGE ?= golangci/golangci-lint:v2.13.2
 SMOKE_GO_IMAGE ?= golang:1.27-bookworm
 
 .PHONY: test
@@ -46,6 +47,10 @@ test-race:
 .PHONY: lint
 lint:
 	$(GOLANGCI_LINT) run
+
+.PHONY: lint-docker
+lint-docker:
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(GOLANGCI_LINT_IMAGE) golangci-lint run
 
 .PHONY: mod-check
 mod-check:

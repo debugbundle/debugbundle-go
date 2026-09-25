@@ -530,7 +530,7 @@ func TestLocalFileTransportDoesNotTouchDiskDuringConstruction(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "events")
 	client := New(Config{ProjectToken: "dbundle_proj_test", ProjectMode: ProjectModeLocalOnly,
 		LocalEventsDir: directory})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := os.Stat(directory); !os.IsNotExist(err) {
 		t.Fatalf("constructor performed local file I/O: %v", err)
 	}
