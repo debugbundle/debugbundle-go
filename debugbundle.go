@@ -13,18 +13,31 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/debugbundle/debugbundle-go/v2/redaction"
-	"github.com/debugbundle/debugbundle-go/v2/transport"
+	"github.com/debugbundle/debugbundle-go/v3/redaction"
+	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
 type Client struct {
 	mu                      sync.Mutex
+	sendMu                  sync.Mutex
+	refreshMu               sync.Mutex
 	config                  resolvedConfig
 	transport               transport.Sender
 	redactor                *redaction.Redactor
-	buffer                  []json.RawMessage
+	buffer                  []queuedEvent
+	bufferBytes             int
+	pendingLowPriority      int
+	inFlightCount           int
+	inFlightBytes           int
+	flushActive             bool
+	pressureDrops           int
+	contentionDrops         atomic.Int64
+	pressureFirstSeen       time.Time
+	pressureLastSeen        time.Time
+	lastPressureReport      time.Time
 	persistent              map[string]any
 	probes                  map[string][]probeEntry
 	suppression             *suppressionTracker
@@ -42,7 +55,18 @@ type Client struct {
 	remoteConfigETag        string
 	remoteConfigSnapshot    RemoteConfigSnapshot
 	remoteConfigInitialized bool
+	remoteConfigReady       chan struct{}
+	remoteConfigCancel      context.CancelFunc
 	capturePolicy           CapturePolicy
+}
+
+const maxPendingEvents = 1_000
+const maxPendingBytes = 8 * 1024 * 1024
+
+type queuedEvent struct {
+	encoded      json.RawMessage
+	highPriority bool
+	finalized    bool
 }
 
 type probeEntry struct {
@@ -52,8 +76,9 @@ type probeEntry struct {
 }
 
 var (
-	defaultClientMu sync.RWMutex
-	defaultClient   *Client
+	defaultClientMu   sync.RWMutex
+	defaultClient     *Client
+	errorRendererSlot = make(chan struct{}, 1)
 )
 
 func Init(config Config) *Client {
@@ -67,17 +92,19 @@ func Init(config Config) *Client {
 func New(config Config) *Client {
 	resolved := config.resolve()
 	client := &Client{
-		config:        resolved,
-		redactor:      redaction.New(resolved.redactFields),
-		buffer:        make([]json.RawMessage, 0, resolved.batchSize),
-		persistent:    map[string]any{},
-		probes:        map[string][]probeEntry{},
-		suppression:   newSuppressionTracker(),
-		status:        StatusDisconnected,
-		rand:          mathrand.New(mathrand.NewSource(time.Now().UnixNano())),
-		capturePolicy: balancedCapturePolicy(),
+		config:            resolved,
+		redactor:          redaction.New(resolved.redactFields),
+		buffer:            make([]queuedEvent, 0, min(resolved.batchSize, maxPendingEvents)),
+		persistent:        map[string]any{},
+		probes:            map[string][]probeEntry{},
+		suppression:       newSuppressionTracker(),
+		status:            StatusDisconnected,
+		rand:              mathrand.New(mathrand.NewSource(time.Now().UnixNano())),
+		capturePolicy:     balancedCapturePolicy(),
+		remoteConfigReady: make(chan struct{}),
 	}
 	if !resolved.enabled {
+		close(client.remoteConfigReady)
 		return client
 	}
 
@@ -94,16 +121,22 @@ func New(config Config) *Client {
 	}
 	if client.transport == nil {
 		client.status = StatusDisconnected
+		close(client.remoteConfigReady)
 		return client
 	}
 	client.status = StatusHealthy
 	if client.remoteConfigFetcher != nil {
-		if err := client.RefreshRemoteConfigNow(context.Background()); err != nil {
-			client.mu.Lock()
-			client.capturePolicy = minimalCapturePolicy()
-			client.diagnostics = append(client.diagnostics, err.Error())
-			client.mu.Unlock()
-		}
+		client.capturePolicy = minimalCapturePolicy()
+		refreshContext, cancel := context.WithCancel(context.Background())
+		client.remoteConfigCancel = cancel
+		go func() {
+			defer close(client.remoteConfigReady)
+			if err := client.RefreshRemoteConfigNow(refreshContext); err != nil {
+				client.recordDiagnostic(err.Error())
+			}
+		}()
+	} else {
+		close(client.remoteConfigReady)
 	}
 	return client
 }
@@ -111,27 +144,49 @@ func New(config Config) *Client {
 func (client *Client) defaultTransport() transport.Sender {
 	useFileTransport := client.config.projectMode == ProjectModeLocalOnly || client.config.environment == "development" || client.config.environment == "local"
 	if useFileTransport {
-		fileTransport, err := transport.NewFileTransport(client.config.localEventsDir)
-		if err == nil {
-			return fileTransport
-		}
-		client.diagnostics = append(client.diagnostics, err.Error())
+		return &lazyFileTransport{root: client.config.localEventsDir}
 	}
 	return transport.NewHTTPTransport(client.config.endpoint, client.config.requestTimeout)
 }
 
+// File validation and directory creation belong to the sender, never the constructor.
+type lazyFileTransport struct {
+	root     string
+	once     sync.Once
+	delegate *transport.FileTransport
+	err      error
+}
+
+func (sender *lazyFileTransport) Send(ctx context.Context, request transport.Request) (transport.Response, error) {
+	sender.once.Do(func() {
+		sender.delegate, sender.err = transport.NewFileTransport(sender.root)
+	})
+	if sender.err != nil {
+		return transport.Response{}, sender.err
+	}
+	return sender.delegate.Send(ctx, request)
+}
+
 func (client *Client) CaptureException(ctx context.Context, err error, options ...EventOption) {
+	defer func() { _ = recover() }()
 	if err == nil {
 		return
 	}
+	if !client.mayPrepareCapture(true) {
+		return
+	}
+	stack := string(debug.Stack())
+	if len(stack) > 16_384 {
+		stack = stack[:16_384]
+	}
 	payload := map[string]any{
 		"name":     fmt.Sprintf("%T", err),
-		"message":  err.Error(),
+		"message":  safeErrorMessage(err),
 		"handled":  true,
 		"request":  emptyRequestPayload(),
 		"response": emptyResponsePayload(),
 		"runtime":  buildRuntimeFacts(),
-		"stack":    string(debug.Stack()),
+		"stack":    stack,
 	}
 	if client.config.probeFlushOnError {
 		if probeData := client.snapshotProbes(); len(probeData) > 0 {
@@ -141,12 +196,44 @@ func (client *Client) CaptureException(ctx context.Context, err error, options .
 	client.capture(ctx, "backend_exception", payload, options...)
 }
 
+func safeErrorMessage(err error) string {
+	select {
+	case errorRendererSlot <- struct{}{}:
+	default:
+		return "[application error renderer busy]"
+	}
+	completed := make(chan string, 1)
+	go func() {
+		message := "[application error message unavailable]"
+		defer func() {
+			_ = recover()
+			completed <- message
+			<-errorRendererSlot
+		}()
+		message = err.Error()
+	}()
+	deadline := time.NewTimer(2 * time.Millisecond)
+	defer deadline.Stop()
+	select {
+	case message := <-completed:
+		if len(message) > 4_096 {
+			return message[:4_096]
+		}
+		return message
+	case <-deadline.C:
+		return "[application error renderer timed out]"
+	}
+}
+
 func (client *Client) CaptureError(ctx context.Context, err error, options ...EventOption) {
 	client.CaptureException(ctx, err, options...)
 }
 
 func (client *Client) CaptureLog(ctx context.Context, message string, level LogLevel, fields map[string]any, options ...EventOption) {
 	if strings.TrimSpace(message) == "" {
+		return
+	}
+	if !client.shouldCaptureLogLevel(level) {
 		return
 	}
 	payload := map[string]any{
@@ -164,6 +251,9 @@ func (client *Client) CaptureMessage(ctx context.Context, message string, option
 	if strings.TrimSpace(message) == "" {
 		return
 	}
+	if !client.shouldCaptureLogLevel(LevelWarning) {
+		return
+	}
 	payload := map[string]any{
 		"message":    message,
 		"level":      LevelWarning,
@@ -175,7 +265,11 @@ func (client *Client) CaptureMessage(ctx context.Context, message string, option
 }
 
 func (client *Client) CaptureRequest(ctx context.Context, request *http.Request, response ResponseInfo, options ...EventOption) {
-	if request == nil {
+	if request == nil || request.URL == nil ||
+		!client.shouldCaptureRequestMetadata(response.StatusCode, request.URL.Path, request.Method) {
+		return
+	}
+	if !client.mayPrepareCapture(response.StatusCode >= 500) {
 		return
 	}
 	if traceID := strings.TrimSpace(request.Header.Get("X-DebugBundle-Trace-Id")); traceID != "" && TraceIDFromContext(ctx) == "" {
@@ -187,14 +281,24 @@ func (client *Client) CaptureRequest(ctx context.Context, request *http.Request,
 	client.capture(ctx, "request_event", requestPayload(request, response), options...)
 }
 
+func (client *Client) shouldCaptureRequestMetadata(statusCode int, path string, method string) bool {
+	if !client.mu.TryLock() {
+		client.contentionDrops.Add(1)
+		return false
+	}
+	defer client.mu.Unlock()
+	return !client.closed && client.transport != nil &&
+		shouldCaptureRequestByPolicy(statusCode, path, method, client.capturePolicy)
+}
+
 func (client *Client) SetContext(key string, value any) {
 	if strings.TrimSpace(key) == "" {
 		return
 	}
-	client.mu.Lock()
-	defer client.mu.Unlock()
 	if value == nil {
+		client.mu.Lock()
 		delete(client.persistent, key)
+		client.mu.Unlock()
 		return
 	}
 	protected, err := redaction.ProtectTelemetry(map[string]any{key: value}, client.config.redactFields)
@@ -205,7 +309,9 @@ func (client *Client) SetContext(key string, value any) {
 	if !ok {
 		return
 	}
+	client.mu.Lock()
 	client.persistent[key] = fields[key]
+	client.mu.Unlock()
 }
 
 func (client *Client) Probe(ctx context.Context, label string, data any, options ...ProbeOption) {
@@ -287,136 +393,6 @@ func (client *Client) recordProbe(ctx context.Context, label string, data any, o
 	}
 }
 
-func (client *Client) Flush(ctx context.Context) error {
-	client.mu.Lock()
-	if client.closed || client.transport == nil {
-		client.mu.Unlock()
-		return nil
-	}
-	now := time.Now().UTC()
-	if !client.retryUntil.IsZero() && now.Before(client.retryUntil) {
-		client.status = StatusDegraded
-		client.mu.Unlock()
-		return nil
-	}
-	batch := append([]json.RawMessage{}, client.buffer...)
-	client.buffer = client.buffer[:0]
-	aggregates := client.suppression.PendingAggregates(now)
-	client.stopFlushTimerLocked()
-	client.mu.Unlock()
-
-	for _, aggregate := range aggregates {
-		event := client.newEventEnvelope("error_suppressed", now, map[string]any{
-			"fingerprint":      aggregate.Fingerprint,
-			"suppressed_count": aggregate.Suppressed,
-			"first_seen":       aggregate.FirstSeenAt.Format(time.RFC3339Nano),
-			"last_seen":        aggregate.LastSeenAt.Format(time.RFC3339Nano),
-			"window_seconds":   maxInt64(1, aggregate.WindowMillis/1000),
-		})
-		protected := client.protectEvent(event)
-		if protected == nil {
-			continue
-		}
-		prepared, diagnostic := applyBeforeSend(*protected, client.config.beforeSend)
-		if diagnostic != "" {
-			client.recordDiagnostic(diagnostic)
-		}
-		if prepared == nil {
-			continue
-		}
-		prepared = client.protectEvent(*prepared)
-		if prepared == nil {
-			continue
-		}
-		encoded, err := json.Marshal(prepared)
-		if err == nil {
-			batch = append(batch, encoded)
-		}
-	}
-	if len(batch) == 0 {
-		return nil
-	}
-
-	response, err := client.transport.Send(ctx, transport.Request{
-		ProjectToken: client.config.projectToken,
-		Events:       batch,
-	})
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if err != nil {
-		client.buffer = append(batch, client.buffer...)
-		client.failures++
-		client.status = StatusDisconnected
-		return nil
-	}
-	if response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError {
-		client.buffer = append(batch, client.buffer...)
-		client.failures++
-		client.status = StatusDegraded
-		retryAfter := response.RetryAfter
-		if retryAfter <= 0 {
-			retryAfter = defaultRetryBackoff(client.failures)
-		}
-		client.retryUntil = time.Now().Add(retryAfter)
-		return nil
-	}
-	if response.StatusCode >= http.StatusBadRequest {
-		client.status = StatusHealthy
-		client.failures = 0
-		return nil
-	}
-	acknowledgement := decideIngestionAcknowledgement(response.Body, len(batch))
-	if acknowledgement.kind == "protocol_failure" {
-		client.buffer = append(batch, client.buffer...)
-		client.failures++
-		client.status = StatusDegraded
-		retryAfter := response.RetryAfter
-		if retryAfter <= 0 {
-			retryAfter = defaultRetryBackoff(client.failures)
-		}
-		client.retryUntil = time.Now().Add(retryAfter)
-		return nil
-	}
-	if acknowledgement.kind == "acknowledged" {
-		retryableEvents := make([]json.RawMessage, 0, len(acknowledgement.retryableIndices))
-		for _, index := range acknowledgement.retryableIndices {
-			if index >= 0 && index < len(batch) {
-				retryableEvents = append(retryableEvents, batch[index])
-			}
-		}
-		client.buffer = append(retryableEvents, client.buffer...)
-		if acknowledgement.accepted > 0 {
-			successAt := time.Now().UTC()
-			client.lastEventAt = &successAt
-		}
-		if len(retryableEvents) > 0 {
-			client.failures++
-			client.status = StatusDegraded
-			retryAfter := response.RetryAfter
-			if retryAfter <= 0 {
-				retryAfter = defaultRetryBackoff(client.failures)
-			}
-			client.retryUntil = time.Now().Add(retryAfter)
-			return nil
-		}
-		client.retryUntil = time.Time{}
-		if acknowledgement.accepted == 0 {
-			client.failures = 3
-			client.status = StatusDisconnected
-			return nil
-		}
-		client.failures = 0
-		client.status = StatusHealthy
-		return nil
-	}
-	client.status = StatusHealthy
-	client.failures = 0
-	successAt := time.Now().UTC()
-	client.lastEventAt = &successAt
-	client.retryUntil = time.Time{}
-	return nil
-}
-
 func (client *Client) Status() SDKStatus {
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -436,6 +412,9 @@ func (client *Client) LastEventAt() *time.Time {
 func (client *Client) Close() error {
 	client.mu.Lock()
 	client.closed = true
+	if client.remoteConfigCancel != nil {
+		client.remoteConfigCancel()
+	}
 	client.stopFlushTimerLocked()
 	if client.remoteConfigTimer != nil {
 		client.remoteConfigTimer.Stop()
@@ -448,13 +427,59 @@ func (client *Client) Close() error {
 	return nil
 }
 
-func (client *Client) capture(ctx context.Context, eventType string, payload map[string]any, options ...EventOption) {
+func (client *Client) finalizeQueuedEvent(candidate queuedEvent) (queuedEvent, bool) {
+	if candidate.finalized {
+		return candidate, true
+	}
+	var event EventEnvelope
+	if err := json.Unmarshal(candidate.encoded, &event); err != nil {
+		return queuedEvent{}, false
+	}
+	prepared, diagnostic := applyBeforeSend(event, client.config.beforeSend)
+	if diagnostic != "" {
+		client.recordDiagnostic(diagnostic)
+	}
+	if prepared == nil {
+		return queuedEvent{}, false
+	}
+	prepared = client.protectEvent(*prepared)
+	if prepared == nil {
+		return queuedEvent{}, false
+	}
 	client.mu.Lock()
+	allowed := client.passesCapturePolicyLocked(*prepared)
+	client.mu.Unlock()
+	if !allowed {
+		return queuedEvent{}, false
+	}
+	encoded, err := json.Marshal(prepared)
+	if err != nil || len(encoded) > maxPendingBytes {
+		return queuedEvent{}, false
+	}
+	return queuedEvent{encoded: encoded, finalized: true, highPriority: candidate.highPriority}, true
+}
+
+func (client *Client) capture(ctx context.Context, eventType string, payload map[string]any, options ...EventOption) {
+	highPriority := eventType == "backend_exception" ||
+		(eventType == "log_event" && shouldCaptureLog(LevelError, LogLevel(stringValue(payload["level"])))) ||
+		(eventType == "request_event" && intValue(payload["response_status"]) >= 500)
+	if !client.mayPrepareCapture(highPriority) {
+		return
+	}
+	if !client.mu.TryLock() {
+		client.contentionDrops.Add(1)
+		return
+	}
 	if client.closed || client.transport == nil {
 		client.mu.Unlock()
 		return
 	}
-	mergedContext := client.mergedContextLocked(ctx, options...)
+	persistent := make(map[string]any, len(client.persistent))
+	for key, value := range client.persistent {
+		persistent[key] = value
+	}
+	client.mu.Unlock()
+	mergedContext := client.mergedContext(persistent, ctx, options...)
 	redactedContext := toObjectMap(client.redactor.Redact(mergedContext))
 	redactedPayload := toObjectMap(client.redactor.Redact(payload))
 	traceID := firstNonEmpty(TraceIDFromContext(ctx), stringValue(redactedContext["trace_id"]), stringValue(redactedPayload["trace_id"]))
@@ -466,60 +491,41 @@ func (client *Client) capture(ctx context.Context, eventType string, payload map
 	if envelopeContext := eventContext(redactedContext); len(envelopeContext) > 0 {
 		event.Context = envelopeContext
 	}
-	client.mu.Unlock()
-
 	protected := client.protectEvent(event)
 	if protected == nil {
 		return
 	}
-	prepared, diagnostic := applyBeforeSend(*protected, client.config.beforeSend)
-	if diagnostic != "" {
-		client.recordDiagnostic(diagnostic)
-	}
-	if prepared == nil {
-		return
-	}
-	prepared = client.protectEvent(*prepared)
-	if prepared == nil {
-		return
-	}
 
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if client.closed || client.transport == nil || !client.passesCapturePolicyLocked(*prepared) || !client.shouldSample() {
-		return
-	}
-	fingerprint := client.fingerprintForEvent(prepared.EventType, prepared.Payload)
-	if fingerprint != "" && !client.suppression.ShouldCapture(fingerprint, time.Now().UTC()) {
-		return
-	}
-	encoded, err := json.Marshal(prepared)
+	encoded, err := json.Marshal(protected)
 	if err != nil {
 		return
 	}
-	client.buffer = append(client.buffer, encoded)
-	client.scheduleFlushLocked(len(client.buffer) >= client.config.batchSize)
+	if !client.mu.TryLock() {
+		client.contentionDrops.Add(1)
+		return
+	}
+	defer client.mu.Unlock()
+	if client.closed || client.transport == nil || !client.passesCapturePolicyLocked(*protected) || !client.shouldSample() {
+		return
+	}
+	fingerprint := client.fingerprintForEvent(protected.EventType, protected.Payload)
+	if fingerprint != "" && !client.suppression.ShouldCapture(fingerprint, time.Now().UTC()) {
+		return
+	}
+	client.offerEncodedLocked(queuedEvent{
+		encoded: encoded,
+		highPriority: protected.EventType == "backend_exception" ||
+			(protected.EventType == "log_event" && shouldCaptureLog(LevelError,
+				LogLevel(stringValue(protected.Payload["level"])))) ||
+			(protected.EventType == "request_event" && intValue(protected.Payload["response_status"]) >= 500),
+	})
 }
 
 func (client *Client) passesCapturePolicyLocked(event EventEnvelope) bool {
 	switch event.EventType {
 	case "log_event":
 		level := LogLevel(stringValue(event.Payload["level"]))
-		if !shouldCaptureLog(client.config.logLevel, level) {
-			return false
-		}
-		switch client.capturePolicy.CaptureLogs {
-		case CaptureLogsOff:
-			return false
-		case CaptureLogsError:
-			return shouldCaptureLog(LevelError, level)
-		case CaptureLogsWarning:
-			return shouldCaptureLog(LevelWarning, level)
-		case CaptureLogsInfo:
-			return shouldCaptureLog(LevelInfo, level)
-		default:
-			return true
-		}
+		return client.captureLogLevelAllowedLocked(level)
 	case "request_event":
 		return shouldCaptureRequestByPolicy(
 			intValue(event.Payload["response_status"]),
@@ -529,6 +535,36 @@ func (client *Client) passesCapturePolicyLocked(event EventEnvelope) bool {
 		)
 	case "probe_event":
 		return client.capturePolicy.CaptureProbeEvents == CaptureProbeEventsStandaloneWhenActivated
+	default:
+		return true
+	}
+}
+
+func (client *Client) shouldCaptureLogLevel(level LogLevel) bool {
+	if !shouldCaptureLog(client.config.logLevel, level) {
+		return false
+	}
+	if !client.mu.TryLock() {
+		client.contentionDrops.Add(1)
+		return false
+	}
+	defer client.mu.Unlock()
+	return !client.closed && client.transport != nil && client.captureLogLevelAllowedLocked(level)
+}
+
+func (client *Client) captureLogLevelAllowedLocked(level LogLevel) bool {
+	if !shouldCaptureLog(client.config.logLevel, level) {
+		return false
+	}
+	switch client.capturePolicy.CaptureLogs {
+	case CaptureLogsOff:
+		return false
+	case CaptureLogsError:
+		return shouldCaptureLog(LevelError, level)
+	case CaptureLogsWarning:
+		return shouldCaptureLog(LevelWarning, level)
+	case CaptureLogsInfo:
+		return shouldCaptureLog(LevelInfo, level)
 	default:
 		return true
 	}
@@ -601,11 +637,8 @@ func (client *Client) correlationPayload(ctx context.Context, mergedContext map[
 	return correlation
 }
 
-func (client *Client) mergedContextLocked(ctx context.Context, options ...EventOption) map[string]any {
-	merged := map[string]any{}
-	for key, value := range client.persistent {
-		merged[key] = value
-	}
+func (client *Client) mergedContext(persistent map[string]any, ctx context.Context, options ...EventOption) map[string]any {
+	merged := persistent
 	for key, value := range ContextValues(ctx) {
 		merged[key] = value
 	}
@@ -630,31 +663,6 @@ func eventContext(mergedContext map[string]any) map[string]any {
 		}
 	}
 	return result
-}
-
-func (client *Client) scheduleFlushLocked(immediate bool) {
-	if client.flushTimer != nil {
-		if immediate {
-			client.flushTimer.Stop()
-			client.flushTimer = nil
-		} else {
-			return
-		}
-	}
-	delay := client.config.flushInterval
-	if immediate {
-		delay = 0
-	}
-	client.flushTimer = time.AfterFunc(delay, func() {
-		_ = client.Flush(context.Background())
-	})
-}
-
-func (client *Client) stopFlushTimerLocked() {
-	if client.flushTimer != nil {
-		client.flushTimer.Stop()
-		client.flushTimer = nil
-	}
 }
 
 func (client *Client) fingerprintForEvent(eventType string, payload map[string]any) string {
@@ -703,6 +711,10 @@ func (client *Client) matchingProbeDirectives(ctx context.Context, label string,
 }
 
 func (client *Client) RefreshRemoteConfigNow(ctx context.Context) error {
+	if !client.refreshMu.TryLock() {
+		return nil
+	}
+	defer client.refreshMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -719,7 +731,7 @@ func (client *Client) RefreshRemoteConfigNow(ctx context.Context) error {
 		Timeout:      client.config.requestTimeout,
 	}
 	client.mu.Unlock()
-	response, err := fetcher.Fetch(ctx, request)
+	response, err := fetchRemoteConfigWithoutPanic(fetcher, ctx, request)
 	if err != nil {
 		client.mu.Lock()
 		client.scheduleRemoteConfigRetryLocked()
@@ -728,6 +740,9 @@ func (client *Client) RefreshRemoteConfigNow(ctx context.Context) error {
 	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
+	if client.closed {
+		return nil
+	}
 	if response.StatusCode == http.StatusNotModified {
 		client.scheduleRemoteConfigRefreshLocked(client.remoteConfigSnapshot.PollInterval)
 		return nil

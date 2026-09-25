@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"testing"
 
-	debugbundle "github.com/debugbundle/debugbundle-go/v2"
-	"github.com/debugbundle/debugbundle-go/v2/transport"
+	debugbundle "github.com/debugbundle/debugbundle-go/v3"
+	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
 type recordingTransport struct {

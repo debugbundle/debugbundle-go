@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	debugbundle "github.com/debugbundle/debugbundle-go/v3"
 )
 
 func Middleware(client *debugbundle.Client) gin.HandlerFunc {

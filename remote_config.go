@@ -14,6 +14,17 @@ import (
 
 type CaptureLogsMode string
 
+func fetchRemoteConfigWithoutPanic(fetcher RemoteConfigFetcher, ctx context.Context, request RemoteConfigRequest) (response RemoteConfigResponse, err error) {
+	defer func() {
+		if recover() != nil {
+			// A failed application callback keeps the existing policy and retry schedule.
+			response = RemoteConfigResponse{}
+			err = errors.New("sdk configuration callback failed")
+		}
+	}()
+	return fetcher.Fetch(ctx, request)
+}
+
 const (
 	CaptureLogsOff     CaptureLogsMode = "off"
 	CaptureLogsError   CaptureLogsMode = "error"

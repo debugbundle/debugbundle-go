@@ -4,15 +4,17 @@ DebugBundle for Go captures backend exceptions, request failures, structured log
 
 ## Installation
 
-This source tree is the protected v2 candidate. After the v2 tag is published, install it with:
+Version 3 changes capture and delivery timing. Existing v2 installations remain on the `github.com/debugbundle/debugbundle-go/v2` module. Install the v3 module with:
 
 ```bash
-go get github.com/debugbundle/debugbundle-go/v2@v2.0.0
+go get github.com/debugbundle/debugbundle-go/v3@v3.0.0
 ```
 
-Until then, the published v1 module remains at `github.com/debugbundle/debugbundle-go`; it does not gain the new pre-transmission privacy boundary merely because the server is upgraded.
+The v1 and v2 import paths and tags remain available. See [MIGRATION-3.0.md](MIGRATION-3.0.md) before updating an installed service.
 
 The root module ships the core client plus optional subpackages for `net/http`, Gin, Echo, `log/slog`, zap, zerolog, and the browser relay handler.
+
+Version 3 rejects logs below the effective threshold before formatting and bounds queued plus in-flight telemetry. Under a full queue, warning traffic yields to exceptions and 5xx request incidents; an all-error overload returns before calling application error renderers. Capture callers drop on brief SDK state-lock contention instead of waiting. See the migration guide for the lossy overload and callback timing contract.
 
 ## Configuration Reference
 
@@ -41,7 +43,7 @@ Capture-policy fields are server-owned and are not accepted in local SDK config.
 | `SampleRate` | `1.0` | Per-event sample rate. |
 | `LogLevel` | `warning` | Minimum captured log severity. |
 | `RequestTimeout` | `5s` | HTTP timeout for connected transport and remote config fetches. |
-| `RedactFields` | mandatory baseline plus `[]` additional fields | Additional field names to redact before buffering or transport; these cannot replace the mandatory baseline in v2. |
+| `RedactFields` | mandatory baseline plus `[]` additional fields | Additional field names to redact before buffering or transport; these cannot replace the mandatory baseline. |
 | `MaxProbeLabels` | `50` | Max distinct probe labels held in memory. |
 | `MaxProbeEntriesPerLabel` | `10` | Ring-buffer size per probe label. |
 | `ProbeFlushOnError` | `true` | Flush probe buffers with exceptions. |
@@ -62,9 +64,9 @@ import (
 	"net/http"
 	"os"
 
-	debugbundle "github.com/debugbundle/debugbundle-go/v2"
-	"github.com/debugbundle/debugbundle-go/v2/debugbundlehttp"
-	"github.com/debugbundle/debugbundle-go/v2/debugbundleslog"
+	debugbundle "github.com/debugbundle/debugbundle-go/v3"
+	"github.com/debugbundle/debugbundle-go/v3/debugbundlehttp"
+	"github.com/debugbundle/debugbundle-go/v3/debugbundleslog"
 )
 
 func main() {
@@ -158,12 +160,12 @@ The buildable examples under [`examples/`](examples/) compile as part of `go tes
 This SDK ships as one Go module. Keep every imported subpackage on the same module version by pinning the root module once:
 
 ```bash
-go get github.com/debugbundle/debugbundle-go/v2@v2.0.0
+go get github.com/debugbundle/debugbundle-go/v3@v3.0.0
 ```
 
 Then import subpackages such as `debugbundlehttp`, `relay`, `debugbundleslog`, `debugbundlegin`, and `debugbundleecho` from that same module version. Do not mix snippets from different tags when copying examples between services.
 
-For an existing v1 service, change each `github.com/debugbundle/debugbundle-go` import to `github.com/debugbundle/debugbundle-go/v2`, then update the requirement to `v2.0.0`. Review any `RedactFields` configuration: v1 replacement-style rules become additive in v2. Keep the v1 module pinned until you have tested the upgraded app; the v1 import path and released tags remain available to existing installations.
+For an existing v2 service, change each `github.com/debugbundle/debugbundle-go/v2` import to `github.com/debugbundle/debugbundle-go/v3` only when adopting the published v3 module. Review hook timing, asynchronous initial policy loading, and bounded overload behavior in the migration guide. Keep v2 pinned until the upgraded app passes its framework smoke.
 
 ## Browser Relay
 
@@ -251,7 +253,7 @@ make smoke
 For an already published tag, the release path can also rerun the same app-driven smoke against the published module install:
 
 ```bash
-make smoke-published VERSION=2.0.0
+make smoke-published VERSION=3.0.0
 ```
 
 ## Validation

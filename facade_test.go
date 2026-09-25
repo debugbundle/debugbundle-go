@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/debugbundle/debugbundle-go/v2/transport"
+	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
 func TestPackageFacadeDelegatesToDefaultClient(t *testing.T) {

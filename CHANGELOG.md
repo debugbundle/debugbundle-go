@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-25
+
+### Changed
+
+- Prepare the v3 module path for bounded, nonblocking capture: reject filtered logs and requests before payload work, cap queued and in-flight events and suppression state, prioritize exceptions, and report queue pressure in one aggregate.
+- Run `BeforeSend`, transport, remote configuration, and local file setup away from automatic capture callers. A new client begins with a restrictive policy until its first remote response; explicit `Flush` has a finite wait budget. See `MIGRATION-3.0.md`.
+- Contain custom transport and remote-config callback panics inside background delivery, preserving retry ownership and restrictive policy without terminating the host process.
+- Reject an all-ERROR full queue before calling application error renderers; preserve exception and 5xx request priority over queued warnings, including after retry restoration.
+
 ## [2.0.0] - 2026-09-21
 
 - Publish the v2 module path `github.com/debugbundle/debugbundle-go/v2` with a native `telemetry-privacy-v1` baseline for context, hooks, buffering, transport, and browser relay. Mandatory known-secret protection cannot be disabled by custom field rules. Existing v1 imports and tags remain unchanged; update imports and review replacement-style `RedactFields` rules when adopting v2.

@@ -1,6 +1,6 @@
 package debugbundle
 
-import "github.com/debugbundle/debugbundle-go/v2/redaction"
+import "github.com/debugbundle/debugbundle-go/v3/redaction"
 
 // protectEvent keeps wire/auth identifiers intact while enforcing mandatory policy on captured data.
 func (client *Client) protectEvent(event EventEnvelope) *EventEnvelope {

@@ -9,11 +9,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/debugbundle/debugbundle-go/v2/transport"
+	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
 type recordingTransport struct {
@@ -37,6 +38,15 @@ type fakeRemoteConfigFetcher struct {
 	responses []RemoteConfigResponse
 	err       error
 	requests  []RemoteConfigRequest
+}
+
+func waitForInitialRemoteConfig(t *testing.T, client *Client) {
+	t.Helper()
+	select {
+	case <-client.remoteConfigReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial remote configuration did not complete")
+	}
 }
 
 func (fetcher *fakeRemoteConfigFetcher) Fetch(_ context.Context, request RemoteConfigRequest) (RemoteConfigResponse, error) {
@@ -253,10 +263,11 @@ func TestBeforeSendDropInvalidFailureAndPolicyOrderingAreSafe(t *testing.T) {
 			return &event
 		},
 	})
+	waitForInitialRemoteConfig(t, policyClient)
 	policyClient.CaptureLog(context.Background(), "policy drop", LevelError, nil)
 	_ = policyClient.Flush(context.Background())
-	if policyCalls != 1 || len(recorder.requests) != 2 {
-		t.Fatalf("expected hook before policy drop, calls=%d requests=%d", policyCalls, len(recorder.requests))
+	if policyCalls != 0 || len(recorder.requests) != 2 {
+		t.Fatalf("filtered log reached the hook or sender, calls=%d requests=%d", policyCalls, len(recorder.requests))
 	}
 }
 
@@ -515,6 +526,21 @@ func TestProjectModeLocalOnlyDefaultsToFileTransport(t *testing.T) {
 	}
 }
 
+func TestLocalFileTransportDoesNotTouchDiskDuringConstruction(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "events")
+	client := New(Config{ProjectToken: "dbundle_proj_test", ProjectMode: ProjectModeLocalOnly,
+		LocalEventsDir: directory})
+	defer client.Close()
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Fatalf("constructor performed local file I/O: %v", err)
+	}
+	client.CaptureMessage(context.Background(), "local warning")
+	_ = client.Flush(context.Background())
+	if _, err := os.Stat(directory); err != nil {
+		t.Fatalf("worker did not initialize the local transport: %v", err)
+	}
+}
+
 func TestRemoteConfigAppliesCapturePolicyToLogsAndRequests(t *testing.T) {
 	recorder := &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}
 	fetcher := &fakeRemoteConfigFetcher{responses: []RemoteConfigResponse{{
@@ -542,6 +568,7 @@ func TestRemoteConfigAppliesCapturePolicyToLogsAndRequests(t *testing.T) {
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
+	waitForInitialRemoteConfig(t, client)
 	client.CaptureLog(context.Background(), "suppressed warning", LevelWarning, nil)
 	request := httptest.NewRequest(http.MethodGet, "https://example.test/orders", nil)
 	client.CaptureRequest(context.Background(), request, ResponseInfo{StatusCode: 200})
@@ -573,6 +600,7 @@ func TestFailedInitRemoteConfigFallsBackToMinimalPolicy(t *testing.T) {
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
+	waitForInitialRemoteConfig(t, client)
 	defer func() { _ = client.Close() }()
 	client.CaptureLog(context.Background(), "warning blocked", LevelWarning, nil)
 	client.CaptureLog(context.Background(), "error kept", LevelError, nil)
@@ -611,6 +639,7 @@ func TestFailedInitRemoteConfigKeepsAlwaysOnProbeBuffers(t *testing.T) {
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
+	waitForInitialRemoteConfig(t, client)
 	defer func() { _ = client.Close() }()
 	client.Probe(context.Background(), "checkout.cart", map[string]any{"items": 3})
 	client.CaptureException(context.Background(), errors.New("boom"))
@@ -664,6 +693,7 @@ func TestFailedRemoteConfigRefreshSchedulesFallbackRetry(t *testing.T) {
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
+	waitForInitialRemoteConfig(t, client)
 	defer func() { _ = client.Close() }()
 
 	client.mu.Lock()
@@ -720,6 +750,7 @@ func TestRemoteProbeActivationShipsStandaloneProbeEventAndUsesETag(t *testing.T)
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
+	waitForInitialRemoteConfig(t, client)
 	invocations := 0
 	client.ProbeLazy(context.Background(), "checkout.tax", func() any {
 		invocations++
@@ -780,6 +811,7 @@ func TestContextForRequestActivatesTriggerTokenForSingleRequest(t *testing.T) {
 		Transport:           recorder,
 		RemoteConfigFetcher: fetcher,
 	})
+	waitForInitialRemoteConfig(t, client)
 
 	expiredQueryToken := createTriggerToken(t, "trigger-key-123", `{"activation_id":"11111111-1111-4111-8111-111111111111","label_pattern":"checkout.*","service":"checkout-api","environment":"production","trigger_expires_at":"2020-03-14T00:00:00Z"}`)
 	validHeaderToken := createTriggerToken(t, "trigger-key-123", `{"activation_id":"22222222-2222-4222-8222-222222222222","label_pattern":"checkout.*","service":"checkout-api","environment":"production","trigger_expires_at":"2036-03-20T00:00:00Z"}`)

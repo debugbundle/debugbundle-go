@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"os"
 
-	debugbundle "github.com/debugbundle/debugbundle-go/v2"
-	"github.com/debugbundle/debugbundle-go/v2/debugbundlehttp"
-	"github.com/debugbundle/debugbundle-go/v2/debugbundleslog"
-	"github.com/debugbundle/debugbundle-go/v2/relay"
+	debugbundle "github.com/debugbundle/debugbundle-go/v3"
+	"github.com/debugbundle/debugbundle-go/v3/debugbundlehttp"
+	"github.com/debugbundle/debugbundle-go/v3/debugbundleslog"
+	"github.com/debugbundle/debugbundle-go/v3/relay"
 )
 
 func main() {

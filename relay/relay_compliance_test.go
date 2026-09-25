@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	debugbundle "github.com/debugbundle/debugbundle-go/v2"
+	debugbundle "github.com/debugbundle/debugbundle-go/v3"
 )
 
 type relayComplianceFixtureSuite struct {

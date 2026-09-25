@@ -6,8 +6,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	debugbundle "github.com/debugbundle/debugbundle-go/v2"
-	"github.com/debugbundle/debugbundle-go/v2/debugbundleecho"
+	debugbundle "github.com/debugbundle/debugbundle-go/v3"
+	"github.com/debugbundle/debugbundle-go/v3/debugbundleecho"
 )
 
 func main() {

@@ -10,6 +10,7 @@ const (
 	loopWindow        = 2 * time.Second
 	loopThreshold     = 10
 	resetAfterSilence = 60 * time.Second
+	maxSuppressionStates = 2_048
 )
 
 type suppressionAggregate struct {
@@ -33,8 +34,11 @@ type suppressionState struct {
 }
 
 type suppressionTracker struct {
-	mu     sync.Mutex
-	states map[string]*suppressionState
+	mu                sync.Mutex
+	states            map[string]*suppressionState
+	overflowCount     int
+	overflowFirstSeen time.Time
+	overflowLastSeen  time.Time
 }
 
 func newSuppressionTracker() *suppressionTracker {
@@ -46,6 +50,14 @@ func (tracker *suppressionTracker) ShouldCapture(fingerprint string, now time.Ti
 	defer tracker.mu.Unlock()
 
 	state := tracker.states[fingerprint]
+	if state == nil && len(tracker.states) >= maxSuppressionStates {
+		if tracker.overflowCount == 0 {
+			tracker.overflowFirstSeen = now
+		}
+		tracker.overflowCount++
+		tracker.overflowLastSeen = now
+		return false
+	}
 	if state == nil || now.Sub(state.lastSeen) > resetAfterSilence {
 		state = &suppressionState{
 			windowStarted: now,
@@ -101,6 +113,18 @@ func (tracker *suppressionTracker) PendingAggregates(now time.Time) []suppressio
 		})
 		state.suppressed = 0
 		state.lastAggregateAt = now
+	}
+	if tracker.overflowCount > 0 {
+		aggregates = append(aggregates, suppressionAggregate{
+			Fingerprint:  "sdk:suppression-state-pressure",
+			Suppressed:   tracker.overflowCount,
+			FirstSeenAt:  tracker.overflowFirstSeen,
+			LastSeenAt:   tracker.overflowLastSeen,
+			WindowMillis: suppressionWindow.Milliseconds(),
+		})
+		tracker.overflowCount = 0
+		tracker.overflowFirstSeen = time.Time{}
+		tracker.overflowLastSeen = time.Time{}
 	}
 	return aggregates
 }

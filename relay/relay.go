@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	debugbundle "github.com/debugbundle/debugbundle-go/v2"
-	"github.com/debugbundle/debugbundle-go/v2/redaction"
-	"github.com/debugbundle/debugbundle-go/v2/transport"
+	debugbundle "github.com/debugbundle/debugbundle-go/v3"
+	"github.com/debugbundle/debugbundle-go/v3/redaction"
+	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
 const (

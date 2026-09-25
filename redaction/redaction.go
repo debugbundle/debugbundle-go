@@ -59,18 +59,25 @@ func New(fields []string) *Redactor {
 }
 
 func (redactor *Redactor) Redact(value any) any {
-	return redactor.redactValue(reflect.ValueOf(value), 0, "", map[visitKey]struct{}{})
+	visitedNodes := 0
+	return redactor.redactValue(reflect.ValueOf(value), 0, "", map[visitKey]struct{}{}, &visitedNodes)
 }
+
+const maxRedactionNodes = 2_048
 
 type visitKey struct {
 	kind reflect.Kind
 	ptr  uintptr
 }
 
-func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string, visited map[visitKey]struct{}) any {
+func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string, visited map[visitKey]struct{}, visitedNodes *int) any {
 	if !value.IsValid() {
 		return nil
 	}
+	if *visitedNodes >= maxRedactionNodes {
+		return "[TruncatedItems]"
+	}
+	(*visitedNodes)++
 	if depth > redactor.maxDepth {
 		return "[TruncatedDepth]"
 	}
@@ -125,7 +132,7 @@ func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string
 		}
 		result := make([]any, 0, limit)
 		for index := 0; index < limit; index++ {
-			result = append(result, redactor.redactValue(value.Index(index), depth+1, key, visited))
+			result = append(result, redactor.redactValue(value.Index(index), depth+1, key, visited, visitedNodes))
 		}
 		if value.Len() > limit {
 			result = append(result, fmt.Sprintf("...[truncated %d items]", value.Len()-limit))
@@ -147,8 +154,10 @@ func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string
 				result["_truncated"] = fmt.Sprintf("%d additional entries omitted", value.Len()-count)
 				break
 			}
-			mapKey := fmt.Sprint(iter.Key().Interface())
-			result[mapKey] = redactor.redactValue(iter.Value(), depth+1, mapKey, visited)
+			mapKey, supported := safeMapKey(iter.Key())
+			if supported {
+				result[mapKey] = redactor.redactValue(iter.Value(), depth+1, mapKey, visited, visitedNodes)
+			}
 			count++
 		}
 		return result
@@ -171,12 +180,33 @@ func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string
 					fieldName = parts[0]
 				}
 			}
-			result[fieldName] = redactor.redactValue(value.Field(index), depth+1, fieldName, visited)
+			result[fieldName] = redactor.redactValue(value.Field(index), depth+1, fieldName, visited, visitedNodes)
 			count++
 		}
 		return result
 	default:
-		return fmt.Sprint(value.Interface())
+		return "[unsupported value]"
+	}
+}
+
+func safeMapKey(value reflect.Value) (string, bool) {
+	for value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return "", false
+		}
+		value = value.Elem()
+	}
+	switch value.Kind() {
+	case reflect.String:
+		return value.String(), true
+	case reflect.Bool:
+		return fmt.Sprint(value.Bool()), true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return fmt.Sprint(value.Int()), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return fmt.Sprint(value.Uint()), true
+	default:
+		return "", false
 	}
 }
 

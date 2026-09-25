@@ -6,13 +6,38 @@ SMOKE_GO_IMAGE ?= golang:1.27-bookworm
 test:
 	$(GO) test ./...
 
+.PHONY: test-docker
+test-docker:
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(SMOKE_GO_IMAGE) go test ./...
+
+TEST_FILTER ?= TestFilteredInfoBurstDoesNotInvokeHookOrRetainEvents
+.PHONY: test-focused-docker
+test-focused-docker:
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(SMOKE_GO_IMAGE) go test -run $(TEST_FILTER) .
+
+.PHONY: test-race-docker
+test-race-docker:
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(SMOKE_GO_IMAGE) go test -race ./...
+
+.PHONY: format-docker
+format-docker:
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(SMOKE_GO_IMAGE) gofmt -w debugbundle.go delivery.go debugbundle_test.go capture_safety_test.go redaction/redaction.go redaction/redaction_test.go
+
 .PHONY: coverage
 coverage:
 	GO="$(GO)" sh scripts/check-coverage.sh
 
+.PHONY: coverage-docker
+coverage-docker:
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(SMOKE_GO_IMAGE) sh scripts/check-coverage.sh
+
 .PHONY: vet
 vet:
 	$(GO) vet ./...
+
+.PHONY: vet-docker
+vet-docker:
+	docker run --rm -v "$(CURDIR)":/workspace -w /workspace $(SMOKE_GO_IMAGE) go vet ./...
 
 .PHONY: test-race
 test-race:
@@ -40,6 +65,9 @@ smoke-module: smoke
 
 .PHONY: verify
 verify: test coverage vet mod-check
+
+.PHONY: verify-docker
+verify-docker: test-docker coverage-docker vet-docker
 
 .PHONY: verify-race
 verify-race: test-race vet mod-check
