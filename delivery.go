@@ -237,7 +237,6 @@ func (client *Client) flushNow(ctx context.Context) {
 	successAt := time.Now().UTC()
 	client.lastEventAt = &successAt
 	client.retryUntil = time.Time{}
-	return
 }
 
 func sendWithoutPanic(sender transport.Sender, ctx context.Context, request transport.Request) (response transport.Response, err error) {

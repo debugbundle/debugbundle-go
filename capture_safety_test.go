@@ -41,11 +41,15 @@ func TestBackgroundCallbackPanicsDoNotCrashHost(t *testing.T) {
 		if mode == "sender" {
 			sender := &panicOnceSender{}
 			client := New(Config{ProjectToken: "dbundle_proj_test", Transport: sender, BatchSize: 1000, FlushInterval: time.Hour})
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			client.CaptureLog(context.Background(), "retained failure", LevelError, nil)
 			_ = client.Flush(context.Background())
 			client.sendMu.Lock()
+			completedCalls := sender.calls.Load()
 			client.sendMu.Unlock()
+			if completedCalls != 1 {
+				t.Fatalf("expected one completed panic attempt, got %d", completedCalls)
+			}
 			client.mu.Lock()
 			retained, inFlight := len(client.buffer), client.inFlightCount
 			retainedBytes, inFlightBytes := client.bufferBytes, client.inFlightBytes
@@ -63,7 +67,7 @@ func TestBackgroundCallbackPanicsDoNotCrashHost(t *testing.T) {
 		}
 		fetcher := &panicOnceConfigFetcher{}
 		client := New(Config{ProjectToken: "dbundle_proj_test", Transport: &recordingTransport{}, RemoteConfigFetcher: fetcher})
-		defer client.Close()
+		defer func() { _ = client.Close() }()
 		select {
 		case <-client.remoteConfigReady:
 		case <-time.After(time.Second):
@@ -118,11 +122,11 @@ func TestHookReplacementIsChargedBeforeNextCallback(t *testing.T) {
 			firstBytes.CompareAndSwap(0, int64(len(encoded)))
 			return &event
 		}})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	defer close(release)
 	client.CaptureLog(context.Background(), "first event", LevelError, nil)
 	client.CaptureLog(context.Background(), "second event", LevelError, nil)
-	go client.Flush(context.Background())
+	go func() { _ = client.Flush(context.Background()) }()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
