@@ -411,7 +411,7 @@ func TestUniqueEventBurstHasFiniteRetainedCapacity(t *testing.T) {
 	}
 }
 
-func TestQueuePressureProducesOneBoundedAggregateAfterTheFullBatch(t *testing.T) {
+func TestQueuePressureProducesOneBoundedAggregate(t *testing.T) {
 	recorder := &recordingTransport{response: transport.Response{StatusCode: http.StatusAccepted}}
 	client := New(Config{ProjectToken: "dbundle_proj_test", BatchSize: 20_000,
 		FlushInterval: time.Hour, RequestTimeout: time.Minute, Transport: recorder})
@@ -420,26 +420,45 @@ func TestQueuePressureProducesOneBoundedAggregateAfterTheFullBatch(t *testing.T)
 		client.CaptureMessage(context.Background(), fmt.Sprintf("pressure warning %d", index))
 	}
 	var requests []transport.Request
+	var aggregate EventEnvelope
+	aggregates := 0
+	forwarded := 0
+	_ = client.Flush(context.Background())
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		_ = client.Flush(context.Background())
 		client.sendMu.Lock()
 		requests = append([]transport.Request(nil), recorder.requests...)
 		client.sendMu.Unlock()
-		if len(requests) >= 2 || time.Now().After(deadline) {
+		aggregates = 0
+		forwarded = 0
+		for _, request := range requests {
+			for _, wire := range request.Events {
+				var event EventEnvelope
+				if err := json.Unmarshal(wire, &event); err != nil {
+					t.Fatalf("decode queued event: %v", err)
+				}
+				if event.EventType == "error_suppressed" {
+					aggregates++
+					aggregate = event
+				} else {
+					forwarded++
+				}
+			}
+		}
+		if aggregates > 0 || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if len(requests) != 2 || len(requests[1].Events) != 1 {
-		t.Fatalf("expected one aggregate after the full batch, got %d batches", len(requests))
+	if aggregates != 1 {
+		t.Fatalf("expected one queue-pressure aggregate, got %d in %d batches", aggregates, len(requests))
 	}
-	var aggregate EventEnvelope
-	if err := json.Unmarshal(requests[1].Events[0], &aggregate); err != nil {
-		t.Fatalf("decode pressure aggregate: %v", err)
-	}
-	if aggregate.EventType != "error_suppressed" || aggregate.Payload["suppressed_count"] != float64(100) {
+	if aggregate.EventType != "error_suppressed" || aggregate.Payload["fingerprint"] != "sdk:queue-pressure" {
 		t.Fatalf("unexpected pressure aggregate: %#v", aggregate)
+	}
+	if forwarded+int(aggregate.Payload["suppressed_count"].(float64)) != 1_100 {
+		t.Fatalf("capture accounting lost events: %d forwarded, %#v suppressed", forwarded, aggregate.Payload["suppressed_count"])
 	}
 }
 
