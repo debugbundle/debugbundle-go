@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,11 +96,17 @@ func TestBoundedRetryAfter(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]time.Duration{
+		time.Now().Add(24 * time.Hour).UTC().Format(http.TimeFormat): maxRetryAfter,
+		time.Now().Add(24 * time.Hour).UTC().Format(time.RFC850):     maxRetryAfter,
+		time.Now().Add(24 * time.Hour).UTC().Format(time.ANSIC):      maxRetryAfter,
 		"":       0,
 		"nope":   0,
 		"-1":     0,
 		"0.5":    500 * time.Millisecond,
 		"999999": maxRetryAfter,
+		"1e300":  maxRetryAfter,
+		"NaN":    0,
+		"+Inf":   0,
 	}
 	for value, expected := range tests {
 		if actual := boundedRetryAfter(value); actual != expected {
@@ -121,4 +129,24 @@ func (failingReadCloser) Read([]byte) (int, error) {
 
 func (failingReadCloser) Close() error {
 	return nil
+}
+
+func TestHTTPTransportRejectsTruncatedAcknowledgement(t *testing.T) {
+	client := NewHTTPTransport("https://example.invalid", time.Second)
+	for _, size := range []int{1 << 20, (1 << 20) + 1} {
+		body := `{"accepted":1,"rejected":0,"errors":[]}`
+		body += strings.Repeat(" ", size-len(body))
+		client.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusAccepted, Header: make(http.Header),
+				Body: io.NopCloser(strings.NewReader(body))}, nil
+		})
+		response, err := client.Send(context.Background(), Request{})
+		if size > 1<<20 {
+			if err == nil || len(response.Body) != 0 {
+				t.Fatal("oversized body must not expose a valid truncated acknowledgement")
+			}
+		} else if err != nil || len(response.Body) != size {
+			t.Fatal("body at the limit must remain supported")
+		}
+	}
 }

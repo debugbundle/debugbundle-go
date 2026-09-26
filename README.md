@@ -7,7 +7,7 @@ DebugBundle for Go captures backend exceptions, request failures, structured log
 Version 3 changes capture and delivery timing. Existing v2 installations remain on the `github.com/debugbundle/debugbundle-go/v2` module. Install the v3 module with:
 
 ```bash
-go get github.com/debugbundle/debugbundle-go/v3@v3.0.0
+go get github.com/debugbundle/debugbundle-go/v3@v3.0.1
 ```
 
 The v1 and v2 import paths and tags remain available. See [MIGRATION-3.0.md](MIGRATION-3.0.md) before updating an installed service.
@@ -160,7 +160,7 @@ The buildable examples under [`examples/`](examples/) compile as part of `go tes
 This SDK ships as one Go module. Keep every imported subpackage on the same module version by pinning the root module once:
 
 ```bash
-go get github.com/debugbundle/debugbundle-go/v3@v3.0.0
+go get github.com/debugbundle/debugbundle-go/v3@v3.0.1
 ```
 
 Then import subpackages such as `debugbundlehttp`, `relay`, `debugbundleslog`, `debugbundlegin`, and `debugbundleecho` from that same module version. Do not mix snippets from different tags when copying examples between services.
@@ -253,7 +253,7 @@ make smoke
 For an already published tag, the release path can also rerun the same app-driven smoke against the published module install:
 
 ```bash
-make smoke-published VERSION=3.0.0
+make smoke-published VERSION=3.0.1
 ```
 
 ## Validation
@@ -293,3 +293,9 @@ Stable releases are cut with `vX.Y.Z` tags. The release workflow runs `make veri
 ## License
 
 Apache-2.0. See LICENSE.
+
+## Delivery acknowledgement and retry limits
+
+The built-in HTTP transport requires the canonical ingestion acknowledgement (`accepted`, `rejected`, and `errors`). Empty responses, unrelated JSON, malformed counts, or invalid rejection indices retain the full batch with backoff. Valid acknowledgements remove accepted and terminally rejected events and retry only the indexed retryable rejections; an all-rejected batch does not advance `lastEventAt`.
+
+File transports and explicitly supplied custom/legacy transports retain their documented bodyless success fallback. A custom transport that returns acknowledgement fields must return the complete canonical shape. Retry hints (delay seconds or HTTP dates) are bounded to five minutes and measured from response receipt, including partial/protocol acknowledgements and retryable server failures. Without a server hint, existing retry timing is preserved. Failures remain contained within the SDK's existing delivery path.

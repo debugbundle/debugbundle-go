@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -43,9 +45,12 @@ func (transport *HTTPTransport) Send(ctx context.Context, request Request) (Resp
 		return Response{}, err
 	}
 	defer func() { _ = httpResponse.Body.Close() }()
-	responseBody, readErr := io.ReadAll(io.LimitReader(httpResponse.Body, 1<<20))
+	responseBody, readErr := io.ReadAll(io.LimitReader(httpResponse.Body, (1<<20)+1))
 	if readErr != nil {
 		return Response{}, readErr
+	}
+	if len(responseBody) > 1<<20 {
+		return Response{}, errors.New("ingestion response exceeds size limit")
 	}
 	return Response{
 		StatusCode: httpResponse.StatusCode,
@@ -60,19 +65,16 @@ func (transport *HTTPTransport) Close() error {
 }
 
 func boundedRetryAfter(value string) time.Duration {
-	if value == "" {
-		return 0
-	}
 	seconds, err := strconv.ParseFloat(value, 64)
 	if err != nil {
+		date, dateErr := http.ParseTime(value)
+		if dateErr != nil {
+			return 0
+		}
+		seconds = time.Until(date).Seconds()
+	}
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		return 0
 	}
-	duration := time.Duration(seconds * float64(time.Second))
-	if duration < 0 {
-		return 0
-	}
-	if duration > maxRetryAfter {
-		return maxRetryAfter
-	}
-	return duration
+	return time.Duration(min(maxRetryAfter.Seconds(), math.Max(0, seconds)) * float64(time.Second))
 }

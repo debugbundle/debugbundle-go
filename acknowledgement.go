@@ -21,9 +21,13 @@ type ingestionAcknowledgementError struct {
 	Reason string `json:"reason"`
 }
 
-func decideIngestionAcknowledgement(body json.RawMessage, batchLength int) ingestionAcknowledgementDecision {
+func decideIngestionAcknowledgement(body json.RawMessage, batchLength int, required ...bool) ingestionAcknowledgementDecision {
+	missing := ingestionAcknowledgementDecision{kind: "legacy"}
+	if len(required) > 0 && required[0] {
+		missing = ingestionAcknowledgementDecision{kind: "protocol_failure", reason: "missing_acknowledgement"}
+	}
 	if len(body) == 0 {
-		return ingestionAcknowledgementDecision{kind: "legacy"}
+		return missing
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
@@ -33,44 +37,49 @@ func decideIngestionAcknowledgement(body json.RawMessage, batchLength int) inges
 	_, rejectedExists := fields["rejected"]
 	_, errorsExist := fields["errors"]
 	if !acceptedExists && !rejectedExists && !errorsExist {
-		return ingestionAcknowledgementDecision{kind: "legacy"}
+		return missing
 	}
 	if !acceptedExists || !rejectedExists || !errorsExist {
 		return ingestionAcknowledgementDecision{kind: "protocol_failure", reason: "inconsistent_counts"}
 	}
 
 	var acknowledgement struct {
-		Accepted int                             `json:"accepted"`
-		Rejected int                             `json:"rejected"`
-		Errors   []ingestionAcknowledgementError `json:"errors"`
+		Accepted *int `json:"accepted"`
+		Rejected *int `json:"rejected"`
+		Errors   []struct {
+			Index  *int   `json:"index"`
+			Reason string `json:"reason"`
+		} `json:"errors"`
 	}
 	if err := json.Unmarshal(body, &acknowledgement); err != nil ||
-		acknowledgement.Accepted < 0 ||
-		acknowledgement.Rejected < 0 ||
-		acknowledgement.Accepted+acknowledgement.Rejected != batchLength ||
-		len(acknowledgement.Errors) != acknowledgement.Rejected {
+		acknowledgement.Accepted == nil || acknowledgement.Rejected == nil || acknowledgement.Errors == nil ||
+		*acknowledgement.Accepted < 0 || *acknowledgement.Rejected < 0 ||
+		*acknowledgement.Accepted > batchLength || *acknowledgement.Rejected > batchLength ||
+		*acknowledgement.Accepted+*acknowledgement.Rejected != batchLength ||
+		len(acknowledgement.Errors) != *acknowledgement.Rejected {
 		return ingestionAcknowledgementDecision{kind: "protocol_failure", reason: "inconsistent_counts"}
 	}
 
 	seen := make(map[int]struct{}, len(acknowledgement.Errors))
 	decision := ingestionAcknowledgementDecision{
 		kind:     "acknowledged",
-		accepted: acknowledgement.Accepted,
+		accepted: *acknowledgement.Accepted,
 	}
 	for _, ingestionError := range acknowledgement.Errors {
-		if ingestionError.Index < 0 ||
-			ingestionError.Index >= batchLength ||
+		if ingestionError.Index == nil || *ingestionError.Index < 0 ||
+			*ingestionError.Index >= batchLength ||
 			ingestionError.Reason == "" {
 			return ingestionAcknowledgementDecision{kind: "protocol_failure", reason: "invalid_error_index"}
 		}
-		if _, duplicate := seen[ingestionError.Index]; duplicate {
+		index := *ingestionError.Index
+		if _, duplicate := seen[index]; duplicate {
 			return ingestionAcknowledgementDecision{kind: "protocol_failure", reason: "invalid_error_index"}
 		}
-		seen[ingestionError.Index] = struct{}{}
+		seen[index] = struct{}{}
 		if _, retryable := retryableIngestionReasons[ingestionError.Reason]; retryable {
-			decision.retryableIndices = append(decision.retryableIndices, ingestionError.Index)
+			decision.retryableIndices = append(decision.retryableIndices, index)
 		} else {
-			decision.terminalErrors = append(decision.terminalErrors, ingestionError)
+			decision.terminalErrors = append(decision.terminalErrors, ingestionAcknowledgementError{Index: index, Reason: ingestionError.Reason})
 		}
 	}
 	return decision

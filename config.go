@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	Version              = "3.0.0"
+	Version              = "3.0.1"
 	defaultEndpoint      = "https://api.debugbundle.com/v1/events"
 	defaultLocalDir      = ".debugbundle/local/events"
 	defaultSpoolDir      = ".debugbundle/local/browser-relay-spool"

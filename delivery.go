@@ -176,7 +176,7 @@ func (client *Client) flushNow(ctx context.Context) {
 		client.restoreLocked(batch)
 		client.failures++
 		client.status = StatusDegraded
-		retryAfter := response.RetryAfter
+		retryAfter := min(response.RetryAfter, maxRetryBackoff)
 		if retryAfter <= 0 {
 			retryAfter = defaultRetryBackoff(client.failures)
 		}
@@ -188,12 +188,13 @@ func (client *Client) flushNow(ctx context.Context) {
 		client.failures = 0
 		return
 	}
-	acknowledgement := decideIngestionAcknowledgement(response.Body, len(batch))
+	_, requiresAcknowledgement := client.transport.(*transport.HTTPTransport)
+	acknowledgement := decideIngestionAcknowledgement(response.Body, len(batch), requiresAcknowledgement)
 	if acknowledgement.kind == "protocol_failure" {
 		client.restoreLocked(batch)
 		client.failures++
 		client.status = StatusDegraded
-		retryAfter := response.RetryAfter
+		retryAfter := min(response.RetryAfter, maxRetryBackoff)
 		if retryAfter <= 0 {
 			retryAfter = defaultRetryBackoff(client.failures)
 		}
@@ -215,7 +216,7 @@ func (client *Client) flushNow(ctx context.Context) {
 		if len(retryableEvents) > 0 {
 			client.failures++
 			client.status = StatusDegraded
-			retryAfter := response.RetryAfter
+			retryAfter := min(response.RetryAfter, maxRetryBackoff)
 			if retryAfter <= 0 {
 				retryAfter = defaultRetryBackoff(client.failures)
 			}
