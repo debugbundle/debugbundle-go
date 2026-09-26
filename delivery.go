@@ -19,8 +19,9 @@ func (client *Client) Flush(ctx context.Context) error {
 	}
 	completed := make(chan struct{})
 	go func() {
-		defer client.sendMu.Unlock()
 		defer close(completed)
+		// Release sender ownership before waking a caller that may flush again.
+		defer client.sendMu.Unlock()
 		client.flushNow(ctx)
 	}()
 	deadline := time.NewTimer(client.config.requestTimeout)

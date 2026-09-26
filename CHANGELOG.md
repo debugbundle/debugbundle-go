@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Release sender ownership before reporting flush completion so a following explicit flush can acquire it.
 - Accept HTTP-date retry hints and reject oversized ingestion responses instead of accepting a truncated acknowledgement.
 - Bound numeric HTTP retry hints before duration conversion to prevent overflow; preserve safe fallback for invalid hints.
 
