@@ -20,7 +20,7 @@ var ErrTelemetryBudget = errors.New("budget_exceeded")
 
 var telemetryHeaders = regexp.MustCompile(`(?i)\b(Authorization|Proxy-Authorization|Cookie|Set-Cookie)\s*:\s*[^\r\n]*`)
 var telemetryBearer = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]{6,}`)
-var telemetryToken = regexp.MustCompile(`\bdbundle_(?:proj|mem|probe|agent)_[A-Za-z0-9_-]+\b`)
+var telemetryToken = regexp.MustCompile(`\bdbundle_(?:proj|mem|probe|agent|anl|anr|ah)_[A-Za-z0-9_-]+\b`)
 var telemetryPem = regexp.MustCompile(`(?i)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----`)
 var telemetryPemStart = regexp.MustCompile(`(?i)-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----`)
 var telemetryUrl = regexp.MustCompile(`(?i)\bhttps?://[^\s<>"']+`)
