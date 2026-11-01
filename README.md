@@ -2,9 +2,9 @@
 
 DebugBundle for Go captures backend exceptions, request failures, structured logs, probe data, and browser relay traffic with instance-first APIs that fit standard Go services.
 
-## Evidence source candidate
+## Evidence in 3.1.0
 
-The unpublished 3.1.0 candidate adds `Config.CaptureExceptionEvidence` (optional
+Version 3.1.0 adds `Config.CaptureExceptionEvidence` (optional
 boolean pointer, default true) and `Config.EvidenceCapabilities` (optional
 `*debugbundle.EvidenceCapabilities`). A descriptor pin uses `Version: 1` and
 `Features: []string{"exception_evidence_v1", ...}` and asserts a verified complete
@@ -35,8 +35,7 @@ valid UTF-8; existing HTTP/context deadlines cover streaming reads. Native reque
 batches use actual encoded bytes. Unsent finalized tails remain charged and hooks
 are not repeated. Only rejected enriched originals receive a compatible downgrade
 when complete ACK evidence revokes support. Native file/custom transport behaviour
-remains subject to its existing explicit profile. This is an unpublished source
-candidate; final coverage/runtime/artifact qualification remains open.
+remains subject to its existing explicit profile. Version 3.1.0 passed the coverage, runtime and installed-artifact release gates.
 
 `Config.CaptureRecoveryObservations` defaults to false. `BeginOperation(ctx,
 OperationOptions{Kind: "request" | "command" | "job", Name: "technical.name",

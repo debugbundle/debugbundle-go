@@ -1,6 +1,8 @@
 ## [Unreleased]
 
-- Prepare the 3.1.0 evidence source candidate with canonical owned hook validation,
+## [3.1.0] - 2026-11-01
+
+- Release 3.1.0 evidence with canonical owned hook validation,
   native cause/join snapshots on the existing bounded renderer, explicit capture
   provenance, per-destination proof and legacy-compatible ACK downgrade.
 - Bound native config/ACK replies and final request bytes; retain finalized tails
@@ -16,7 +18,7 @@
   per text value; keep policy state local and preserve literal-field matching.
 - Add evidence-off/on allocation, capture-time and queue-pressure comparisons, and
   clean installation of deterministic unpublished module archives on supported runtimes.
-- Whole-phase qualification and separate release authority remain open.
+- Runtime, module-consumer and release checks passed before publication.
 
 
 ## [3.0.1] - 2026-09-26
