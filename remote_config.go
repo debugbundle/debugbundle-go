@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/debugbundle/debugbundle-go/v3/internal/evidence"
 	"net/http"
 	"net/url"
 	"path"
@@ -50,6 +51,7 @@ const (
 
 type CapturePolicy struct {
 	Preset                        string
+	CaptureDiagnosticContext      bool
 	CaptureLogs                   CaptureLogsMode
 	CaptureRequestEvents          CaptureRequestEventsMode
 	CaptureBreadcrumbs            string
@@ -73,13 +75,14 @@ type RemoteProbeDirective struct {
 }
 
 type RemoteConfigSnapshot struct {
-	ProbesEnabled       bool
-	RemoteProbesEnabled bool
-	Directives          []RemoteProbeDirective
-	PollInterval        time.Duration
-	TriggerTokenKey     string
-	CapturePolicy       CapturePolicy
-	ETag                string
+	EvidenceCapabilities EvidenceCapabilities
+	ProbesEnabled        bool
+	RemoteProbesEnabled  bool
+	Directives           []RemoteProbeDirective
+	PollInterval         time.Duration
+	TriggerTokenKey      string
+	CapturePolicy        CapturePolicy
+	ETag                 string
 }
 
 type RemoteConfigRequest struct {
@@ -97,6 +100,7 @@ type RemoteConfigResponse struct {
 
 type remoteCapturePolicyPayload struct {
 	Preset                        string                                `json:"preset"`
+	CaptureDiagnosticContext      json.RawMessage                       `json:"capture_diagnostic_context"`
 	CaptureLogs                   string                                `json:"capture_logs"`
 	CaptureRequestEvents          string                                `json:"capture_request_events"`
 	CaptureBreadcrumbs            string                                `json:"capture_breadcrumbs"`
@@ -133,6 +137,8 @@ func (fetcher *HTTPRemoteConfigFetcher) Fetch(ctx context.Context, request Remot
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+request.ProjectToken)
 	httpRequest.Header.Set("Accept", "application/json")
+	httpRequest.Header.Set("X-DebugBundle-Evidence", "1")
+	httpRequest.Header.Set("Accept-Encoding", "identity")
 	if request.IfNoneMatch != "" {
 		httpRequest.Header.Set("If-None-Match", request.IfNoneMatch)
 	}
@@ -141,7 +147,7 @@ func (fetcher *HTTPRemoteConfigFetcher) Fetch(ctx context.Context, request Remot
 		return RemoteConfigResponse{}, err
 	}
 	defer func() { _ = httpResponse.Body.Close() }()
-	body, err := ioReadAll(httpResponse.Body)
+	body, err := evidence.ReadResponse(httpResponse)
 	if err != nil {
 		return RemoteConfigResponse{}, err
 	}
@@ -165,11 +171,12 @@ func defaultRemoteConfigURL(endpoint string) string {
 
 func balancedCapturePolicy() CapturePolicy {
 	return CapturePolicy{
-		Preset:               "balanced",
-		CaptureLogs:          CaptureLogsWarning,
-		CaptureRequestEvents: CaptureRequestEventsFailuresOnly,
-		CaptureBreadcrumbs:   "exception_only",
-		CaptureProbeEvents:   CaptureProbeEventsBufferOnly,
+		Preset:                   "balanced",
+		CaptureDiagnosticContext: true,
+		CaptureLogs:              CaptureLogsWarning,
+		CaptureRequestEvents:     CaptureRequestEventsFailuresOnly,
+		CaptureBreadcrumbs:       "exception_only",
+		CaptureProbeEvents:       CaptureProbeEventsBufferOnly,
 	}
 }
 
@@ -185,9 +192,10 @@ func minimalCapturePolicy() CapturePolicy {
 
 func parseRemoteConfig(body []byte, fallbackInterval time.Duration, now time.Time) (RemoteConfigSnapshot, error) {
 	var payload struct {
-		ProbesEnabled       bool `json:"probes_enabled"`
-		RemoteProbesEnabled bool `json:"remote_probes_enabled"`
-		ActiveProbes        []struct {
+		EvidenceCapabilities any  `json:"evidence_capabilities"`
+		ProbesEnabled        bool `json:"probes_enabled"`
+		RemoteProbesEnabled  bool `json:"remote_probes_enabled"`
+		ActiveProbes         []struct {
 			ID           string `json:"id"`
 			LabelPattern string `json:"label_pattern"`
 			Service      string `json:"service"`
@@ -227,12 +235,13 @@ func parseRemoteConfig(body []byte, fallbackInterval time.Duration, now time.Tim
 		})
 	}
 	return RemoteConfigSnapshot{
-		ProbesEnabled:       payload.ProbesEnabled,
-		RemoteProbesEnabled: payload.RemoteProbesEnabled,
-		Directives:          directives,
-		PollInterval:        interval,
-		TriggerTokenKey:     strings.TrimSpace(payload.TriggerTokenKey),
-		CapturePolicy:       policy,
+		EvidenceCapabilities: evidence.Descriptor(payload.EvidenceCapabilities),
+		ProbesEnabled:        payload.ProbesEnabled,
+		RemoteProbesEnabled:  payload.RemoteProbesEnabled,
+		Directives:           directives,
+		PollInterval:         interval,
+		TriggerTokenKey:      strings.TrimSpace(payload.TriggerTokenKey),
+		CapturePolicy:        policy,
 	}, nil
 }
 
@@ -264,6 +273,14 @@ func parseCapturePolicy(payload *remoteCapturePolicyPayload) (CapturePolicy, err
 	case CaptureProbeEventsBufferOnly, CaptureProbeEventsStandaloneWhenActivated:
 	default:
 		return CapturePolicy{}, errors.New("invalid capture_probe_events policy")
+	}
+	policy.CaptureDiagnosticContext = policy.Preset != "minimal"
+	if len(payload.CaptureDiagnosticContext) > 0 {
+		var enabled *bool
+		if json.Unmarshal(payload.CaptureDiagnosticContext, &enabled) != nil || enabled == nil {
+			return CapturePolicy{}, errors.New("invalid capture_diagnostic_context policy")
+		}
+		policy.CaptureDiagnosticContext = *enabled && policy.Preset != "minimal"
 	}
 	policy.ImmediateClientErrorStatuses = uniqueSortedClientStatuses(payload.ImmediateClientErrorStatuses)
 	pathRules, err := parseImmediateClientErrorPathRules(payload.ImmediateClientErrorPathRules)

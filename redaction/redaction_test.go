@@ -40,3 +40,26 @@ func TestRedactSegmentAwareSensitiveKeys(t *testing.T) {
 		t.Fatalf("expected safe value to be preserved, got %#v", profile["safe"])
 	}
 }
+
+func TestRepeatedNativeCollectionsAreNotMisreportedAsCycles(t *testing.T) {
+	shared := map[string]any{"password": "synthetic-private"}
+	empty := []any{}
+	input := map[string]any{"first": shared, "second": shared, "frames": empty, "relationships": empty}
+	output := New(nil).Redact(input).(map[string]any)
+	for _, key := range []string{"first", "second"} {
+		fields, ok := output[key].(map[string]any)
+		if !ok || fields["password"] != "[REDACTED]" {
+			t.Fatal("repeated data lost or skipped privacy")
+		}
+	}
+	for _, key := range []string{"frames", "relationships"} {
+		if _, ok := output[key].([]any); !ok {
+			t.Fatal("empty native array misreported as a cycle")
+		}
+	}
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+	if New(nil).Redact(cycle).(map[string]any)["self"] != "[Circular]" {
+		t.Fatal("actual cycle no longer bounded")
+	}
+}

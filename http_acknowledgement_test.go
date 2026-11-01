@@ -3,8 +3,12 @@ package debugbundle
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,6 +70,9 @@ func TestBuiltInHTTPRequiresAcknowledgement(t *testing.T) {
 			client := New(Config{ProjectToken: "dbundle_proj_test", Environment: "production", Endpoint: server.URL,
 				BatchSize: 100, FlushInterval: time.Hour, RemoteConfigFetcher: &fakeRemoteConfigFetcher{}})
 			defer func() { _ = client.Close() }()
+			// Exercise acknowledgement retention after initial discovery has released
+			// the mutation lock, rather than racing the separate startup path.
+			waitForInitialRemoteConfig(t, client)
 			client.CaptureLog(context.Background(), "first", LevelError, nil)
 			client.CaptureLog(context.Background(), "second", LevelError, nil)
 			_ = client.Flush(context.Background())
@@ -80,9 +87,56 @@ func TestBuiltInHTTPRequiresAcknowledgement(t *testing.T) {
 			client.retryUntil = time.Time{}
 			client.mu.Unlock()
 			_ = client.Flush(context.Background())
-			if len(batches) != 2 || string(batches[0][0]) != string(batches[1][0]) || string(batches[0][1]) != string(batches[1][1]) {
+			if len(batches) != 2 || len(batches[0]) != 2 || len(batches[1]) != 2 {
+				t.Fatalf("full retained batch not recovered: %#v", batches)
+			}
+			if string(batches[0][0]) != string(batches[1][0]) || string(batches[0][1]) != string(batches[1][1]) {
 				t.Fatalf("full retained batch not recovered: %#v", batches)
 			}
 		})
+	}
+}
+
+func TestNativeDeliveryUsesFinalRequestBytesAndRetainsFinalizedTail(t *testing.T) {
+	var accepted, largest, hooks atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		data, _ := io.ReadAll(request.Body)
+		for previous := largest.Load(); int64(len(data)) > previous; previous = largest.Load() {
+			if largest.CompareAndSwap(previous, int64(len(data))) {
+				break
+			}
+		}
+		var payload struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		_ = json.Unmarshal(data, &payload)
+		if len(data) > 262144 {
+			writer.WriteHeader(413)
+			return
+		}
+		accepted.Add(int64(len(payload.Events)))
+		writer.WriteHeader(202)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"accepted": len(payload.Events), "rejected": 0, "errors": []any{}})
+	}))
+	defer server.Close()
+	client := New(Config{ProjectToken: "synthetic", Transport: transport.NewHTTPTransport(server.URL, time.Second), BatchSize: 1000, FlushInterval: time.Hour,
+		BeforeSend: func(event EventEnvelope) *EventEnvelope { hooks.Add(1); return &event }})
+	defer func() { _ = client.Close() }()
+	for index := 0; index < 25; index++ {
+		fields := map[string]any{}
+		for field := 0; field < 8; field++ {
+			fields[fmt.Sprintf("detail_%d", field)] = strings.Repeat("x", 1500)
+		}
+		client.CaptureLog(context.Background(), fmt.Sprintf("wire fixture %d", index), LevelError, fields)
+	}
+	// Flush has a finite caller wait while its single sender may still finalize
+	// a batch. Allow instrumented serialization to settle before checking delivery.
+	deadline := time.Now().Add(15 * time.Second)
+	for accepted.Load() < 25 && time.Now().Before(deadline) {
+		_ = client.Flush(context.Background())
+		time.Sleep(time.Millisecond)
+	}
+	if largest.Load() > 262144 || accepted.Load() != 25 || hooks.Load() != 25 {
+		t.Fatalf("native bytes=%d accepted=%d hooks=%d", largest.Load(), accepted.Load(), hooks.Load())
 	}
 }

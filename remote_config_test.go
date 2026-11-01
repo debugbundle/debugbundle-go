@@ -3,6 +3,7 @@ package debugbundle
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -284,4 +285,55 @@ func (remoteFailingReadCloser) Read([]byte) (int, error) {
 
 func (remoteFailingReadCloser) Close() error {
 	return nil
+}
+
+func TestNativeConfigReplyUsesTheSameBoundedEvidenceReader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("X-DebugBundle-Evidence") != "1" {
+			t.Error("missing existing-request negotiation")
+		}
+		_, _ = io.WriteString(writer, strings.Repeat("x", 262145))
+	}))
+	defer server.Close()
+	fetcher := NewHTTPRemoteConfigFetcher(time.Second)
+	if _, err := fetcher.Fetch(context.Background(), RemoteConfigRequest{URL: server.URL, ProjectToken: "synthetic", Timeout: time.Second}); err == nil {
+		t.Fatal("oversized native config reply accepted")
+	}
+}
+
+func TestLocalFileDestinationDoesNotLearnDeliveryProofFromHostedConfig(t *testing.T) {
+	requests := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- struct{}{}
+		_, _ = io.WriteString(writer, `{"evidence_capabilities":{"version":1,"features":["exception_evidence_v1"]}}`)
+	}))
+	defer server.Close()
+	client := New(Config{ProjectToken: "synthetic", Environment: "development", Endpoint: server.URL + "/v1/events", LocalEventsDir: t.TempDir()})
+	defer func() { _ = client.Close() }()
+	<-client.remoteConfigReady
+	if client.remoteConfigFetcher == nil {
+		t.Fatal("legacy local-file policy/probe polling was removed")
+	}
+	if client.evidence.Supports("exception_evidence_v1") {
+		t.Fatal("hosted API proof enabled an unqualified local reader path")
+	}
+	select {
+	case <-requests:
+	default:
+		t.Fatal("existing policy/probe request was not preserved")
+	}
+}
+
+type localPolicyProofFetcher struct{}
+
+func (localPolicyProofFetcher) Fetch(context.Context, RemoteConfigRequest) (RemoteConfigResponse, error) {
+	return RemoteConfigResponse{StatusCode: 200, Body: []byte(`{"evidence_capabilities":{"version":1,"features":["exception_evidence_v1"]}}`)}, nil
+}
+func TestExplicitLocalPolicyFetcherCannotGrantUnrelatedDeliveryProof(t *testing.T) {
+	client := New(Config{ProjectToken: "synthetic", Environment: "development", LocalEventsDir: t.TempDir(), RemoteConfigFetcher: localPolicyProofFetcher{}})
+	defer func() { _ = client.Close() }()
+	<-client.remoteConfigReady
+	if client.evidence.Supports("exception_evidence_v1") {
+		t.Fatal("policy callback enabled an unqualified native local-reader path")
+	}
 }

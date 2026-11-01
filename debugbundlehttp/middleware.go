@@ -1,7 +1,6 @@
 package debugbundlehttp
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 
@@ -32,6 +31,8 @@ func Middleware(client *debugbundle.Client, options Options) func(http.Handler) 
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			startedAt := time.Now()
 			ctx := client.ContextForRequest(request)
+			ctx, endOperation := client.BeginOperation(ctx, debugbundle.OperationOptions{Kind: "request"})
+			defer endOperation()
 			request = request.WithContext(ctx)
 			recorder := &statusRecorder{ResponseWriter: writer, status: http.StatusOK}
 			defer func() {
@@ -46,7 +47,7 @@ func Middleware(client *debugbundle.Client, options Options) func(http.Handler) 
 					if options.RoutePattern != nil {
 						response.Route = options.RoutePattern(request)
 					}
-					client.CaptureException(ctx, fmt.Errorf("panic recovered: %v", recovered))
+					client.CapturePanic(ctx, recovered)
 					client.CaptureRequest(ctx, request, response)
 					if options.RecoverPanics {
 						http.Error(recorder, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

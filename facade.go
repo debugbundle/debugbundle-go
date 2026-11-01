@@ -2,7 +2,6 @@ package debugbundle
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -10,7 +9,7 @@ import (
 func Recover(ctx context.Context) {
 	if recovered := recover(); recovered != nil {
 		if client := getDefaultClient(); client != nil {
-			client.CaptureException(ctx, fmt.Errorf("panic recovered: %v", recovered))
+			client.CapturePanic(ctx, recovered)
 		}
 	}
 }
@@ -133,4 +132,18 @@ func Diagnostics() []string {
 		return append([]string{}, client.diagnostics...)
 	}
 	return nil
+}
+
+// RunWithOperationContext preserves callback results even when no SDK is configured.
+func RunWithOperationContext(ctx context.Context, options OperationOptions, callback func(context.Context) error) error {
+	if client := getDefaultClient(); client != nil {
+		return client.RunWithOperationContext(ctx, options, callback)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if callback == nil {
+		return nil
+	}
+	return callback(ctx)
 }

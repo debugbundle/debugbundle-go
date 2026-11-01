@@ -6,12 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/debugbundle/debugbundle-go/v3/internal/evidence"
 	"github.com/debugbundle/debugbundle-go/v3/redaction"
 	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
 const (
-	Version              = "3.0.1"
+	Version              = "3.1.0"
 	defaultEndpoint      = "https://api.debugbundle.com/v1/events"
 	defaultLocalDir      = ".debugbundle/local/events"
 	defaultSpoolDir      = ".debugbundle/local/browser-relay-spool"
@@ -31,79 +32,93 @@ const (
 	ProjectModeLocalOnly ProjectMode = "local-only"
 )
 
+type EvidenceCapabilities = evidence.Capabilities
+
 type Config struct {
-	ProjectToken            string
-	Enabled                 *bool
-	Environment             string
-	Service                 string
-	Endpoint                string
-	ProjectMode             ProjectMode
-	LocalEventsDir          string
-	SpoolDir                string
-	BatchSize               int
-	FlushInterval           time.Duration
-	ProbesPollInterval      time.Duration
-	SampleRate              float64
-	LogLevel                LogLevel
-	RequestTimeout          time.Duration
-	RedactFields            []string
-	MaxProbeLabels          int
-	MaxProbeEntriesPerLabel int
-	ProbeFlushOnError       *bool
-	Transport               transport.Sender
-	RemoteConfigFetcher     RemoteConfigFetcher
-	BeforeSend              BeforeSendFunc
+	CaptureRecoveryObservations bool
+	CaptureExceptionEvidence    *bool
+	EvidenceCapabilities        *EvidenceCapabilities
+	ProjectToken                string
+	Enabled                     *bool
+	Environment                 string
+	Service                     string
+	Endpoint                    string
+	ProjectMode                 ProjectMode
+	LocalEventsDir              string
+	SpoolDir                    string
+	BatchSize                   int
+	FlushInterval               time.Duration
+	ProbesPollInterval          time.Duration
+	SampleRate                  float64
+	LogLevel                    LogLevel
+	RequestTimeout              time.Duration
+	RedactFields                []string
+	MaxProbeLabels              int
+	MaxProbeEntriesPerLabel     int
+	ProbeFlushOnError           *bool
+	Transport                   transport.Sender
+	RemoteConfigFetcher         RemoteConfigFetcher
+	BeforeSend                  BeforeSendFunc
 }
 
 type resolvedConfig struct {
-	projectToken            string
-	enabled                 bool
-	environment             string
-	service                 string
-	endpoint                string
-	projectMode             ProjectMode
-	localEventsDir          string
-	spoolDir                string
-	batchSize               int
-	flushInterval           time.Duration
-	probesPollInterval      time.Duration
-	sampleRate              float64
-	logLevel                LogLevel
-	requestTimeout          time.Duration
-	redactFields            []string
-	maxProbeLabels          int
-	maxProbeEntriesPerLabel int
-	probeFlushOnError       bool
-	transport               transport.Sender
-	remoteConfigFetcher     RemoteConfigFetcher
-	beforeSend              BeforeSendFunc
+	captureRecoveryObservations bool
+	captureExceptionEvidence    bool
+	evidenceCapabilities        EvidenceCapabilities
+	projectToken                string
+	enabled                     bool
+	environment                 string
+	service                     string
+	endpoint                    string
+	projectMode                 ProjectMode
+	localEventsDir              string
+	spoolDir                    string
+	batchSize                   int
+	flushInterval               time.Duration
+	probesPollInterval          time.Duration
+	sampleRate                  float64
+	logLevel                    LogLevel
+	requestTimeout              time.Duration
+	redactFields                []string
+	maxProbeLabels              int
+	maxProbeEntriesPerLabel     int
+	probeFlushOnError           bool
+	transport                   transport.Sender
+	remoteConfigFetcher         RemoteConfigFetcher
+	beforeSend                  BeforeSendFunc
 }
 
 func (config Config) resolve() resolvedConfig {
 	resolved := resolvedConfig{
-		projectToken:            strings.TrimSpace(config.ProjectToken),
-		enabled:                 strings.TrimSpace(config.ProjectToken) != "",
-		environment:             normalizeEnvironment(config.Environment),
-		service:                 normalizeService(config.Service),
-		endpoint:                config.Endpoint,
-		projectMode:             config.ProjectMode,
-		localEventsDir:          config.LocalEventsDir,
-		spoolDir:                config.SpoolDir,
-		batchSize:               config.BatchSize,
-		flushInterval:           config.FlushInterval,
-		probesPollInterval:      config.ProbesPollInterval,
-		sampleRate:              config.SampleRate,
-		logLevel:                normalizeLogLevel(config.LogLevel),
-		requestTimeout:          config.RequestTimeout,
-		redactFields:            append([]string{}, config.RedactFields...),
-		maxProbeLabels:          config.MaxProbeLabels,
-		maxProbeEntriesPerLabel: config.MaxProbeEntriesPerLabel,
-		probeFlushOnError:       true,
-		transport:               config.Transport,
-		remoteConfigFetcher:     config.RemoteConfigFetcher,
-		beforeSend:              config.BeforeSend,
+		captureRecoveryObservations: config.CaptureRecoveryObservations,
+		captureExceptionEvidence:    true,
+		evidenceCapabilities:        evidence.Descriptor(config.EvidenceCapabilities),
+		projectToken:                strings.TrimSpace(config.ProjectToken),
+		enabled:                     strings.TrimSpace(config.ProjectToken) != "",
+		environment:                 normalizeEnvironment(config.Environment),
+		service:                     normalizeService(config.Service),
+		endpoint:                    config.Endpoint,
+		projectMode:                 config.ProjectMode,
+		localEventsDir:              config.LocalEventsDir,
+		spoolDir:                    config.SpoolDir,
+		batchSize:                   config.BatchSize,
+		flushInterval:               config.FlushInterval,
+		probesPollInterval:          config.ProbesPollInterval,
+		sampleRate:                  config.SampleRate,
+		logLevel:                    normalizeLogLevel(config.LogLevel),
+		requestTimeout:              config.RequestTimeout,
+		redactFields:                append([]string{}, config.RedactFields...),
+		maxProbeLabels:              config.MaxProbeLabels,
+		maxProbeEntriesPerLabel:     config.MaxProbeEntriesPerLabel,
+		probeFlushOnError:           true,
+		transport:                   config.Transport,
+		remoteConfigFetcher:         config.RemoteConfigFetcher,
+		beforeSend:                  config.BeforeSend,
 	}
 
+	if config.CaptureExceptionEvidence != nil {
+		resolved.captureExceptionEvidence = *config.CaptureExceptionEvidence
+	}
 	if config.Enabled != nil {
 		resolved.enabled = *config.Enabled && resolved.projectToken != ""
 	}

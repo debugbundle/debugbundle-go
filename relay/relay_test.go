@@ -333,7 +333,7 @@ func TestRelayStripsCredentialsAndWritesLocalBatch(t *testing.T) {
 
 func TestRelayConnectedDurableWritesSpoolForwardsAndMarksDelivered(t *testing.T) {
 	spoolDir := t.TempDir()
-	forwarder := &recordingTransport{}
+	forwarder := &recordingTransport{response: transport.Response{StatusCode: 202, Body: json.RawMessage(`{"accepted":1,"rejected":0,"errors":[]}`)}}
 	handler := NewHandler(nil, Options{
 		AllowedOrigins: []string{"https://app.example.test"},
 		ProjectMode:    debugbundle.ProjectModeConnected,

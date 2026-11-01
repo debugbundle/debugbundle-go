@@ -14,6 +14,7 @@ import (
 	"time"
 
 	debugbundle "github.com/debugbundle/debugbundle-go/v3"
+	"github.com/debugbundle/debugbundle-go/v3/internal/evidence"
 	"github.com/debugbundle/debugbundle-go/v3/redaction"
 	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
@@ -27,6 +28,7 @@ const (
 
 var acceptedEventTypes = map[string]struct{}{
 	"frontend_exception":  {},
+	"diagnostic_context":  {},
 	"error_suppressed":    {},
 	"frontend_breadcrumb": {},
 	"request_event":       {},
@@ -37,6 +39,7 @@ var acceptedEventTypes = map[string]struct{}{
 var errInvalidBrowserRelayPayload = errString("Invalid browser relay event payload.")
 
 type Options struct {
+	EvidenceCapabilities *debugbundle.EvidenceCapabilities
 	AllowedOrigins       []string
 	MaxBodyBytes         int64
 	RateLimitPerMinute   int
@@ -53,9 +56,16 @@ type Options struct {
 }
 
 type responseBody struct {
-	Accepted int      `json:"accepted"`
-	Rejected int      `json:"rejected"`
-	Errors   []string `json:"errors"`
+	Accepted             int                    `json:"accepted"`
+	Rejected             int                    `json:"rejected"`
+	Errors               []string               `json:"errors"`
+	EvidenceErrors       []evidenceError        `json:"evidence_errors,omitempty"`
+	EvidenceCapabilities *evidence.Capabilities `json:"evidence_capabilities,omitempty"`
+}
+
+type evidenceError struct {
+	Index  int    `json:"index"`
+	Reason string `json:"reason"`
 }
 
 type rateLimiter struct {
@@ -90,6 +100,7 @@ func (limiter *rateLimiter) Allow(key string, limit int, now time.Time) bool {
 }
 
 type handler struct {
+	evidence    *evidence.State
 	options     Options
 	config      debugbundle.RuntimeConfig
 	rateLimiter *rateLimiter
@@ -103,6 +114,7 @@ func NewHandler(client *debugbundle.Client, options Options) http.Handler {
 	}
 	resolved := resolveOptions(config, options)
 	return &handler{
+		evidence:    evidence.NewState(resolved.EvidenceCapabilities),
 		options:     resolved,
 		config:      config,
 		rateLimiter: newRateLimiter(),
@@ -182,15 +194,24 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 	accepted := make([]json.RawMessage, 0, len(payload.Batch))
 	errors := make([]string, 0)
+	indexed := []evidenceError{}
 	for index, candidate := range payload.Batch {
 		sanitized, err := sanitizeEvent(candidate, handler.options)
 		if err != nil {
 			errors = append(errors, "batch["+strconvItoa(index)+"]: "+err.Error())
+			indexed = append(indexed, evidenceError{index, "invalid_event"})
+			continue
+		}
+		sanitized = handler.evidence.Filter(sanitized, true)
+		if sanitized == nil {
+			errors = append(errors, "batch["+strconvItoa(index)+"]: Unsupported destination evidence.")
+			indexed = append(indexed, evidenceError{index, "invalid_event"})
 			continue
 		}
 		encoded, err := json.Marshal(sanitized)
 		if err != nil {
 			errors = append(errors, "batch["+strconvItoa(index)+"]: invalid browser relay event payload.")
+			indexed = append(indexed, evidenceError{index, "invalid_event"})
 			continue
 		}
 		accepted = append(accepted, encoded)
@@ -205,7 +226,14 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	if len(errors) > 0 {
 		status = http.StatusBadRequest
 	}
-	writeJSON(writer, status, responseBody{Accepted: len(accepted), Rejected: len(errors), Errors: errors})
+	result := responseBody{Accepted: len(accepted), Rejected: len(errors), Errors: errors}
+	if request.Header.Get("X-DebugBundle-Evidence") == "1" || request.URL.Query().Get("debugbundle_evidence") == "1" {
+		status = http.StatusAccepted
+		descriptor := handler.evidence.Descriptor()
+		result.EvidenceCapabilities = &descriptor
+		result.EvidenceErrors = indexed
+	}
+	writeJSON(writer, status, result)
 }
 
 func (handler *handler) deliverAccepted(ctx context.Context, accepted []json.RawMessage) bool {
@@ -230,21 +258,14 @@ func (handler *handler) deliverAccepted(ctx context.Context, accepted []json.Raw
 			if err != nil || spoolResponse.StatusCode < 200 || spoolResponse.StatusCode >= 300 {
 				return false
 			}
-			forwardTransport := handler.forwardDeliveryTransport()
-			if forwardTransport != nil {
-				forwardResponse, err := forwardTransport.Send(ctx, transport.Request{ProjectToken: handler.options.ProjectToken, Events: accepted})
-				if err == nil && forwardResponse.StatusCode >= 200 && forwardResponse.StatusCode < 300 {
-					markSpoolFileDelivered(spoolResponse.WrittenFilePath)
-				}
+			_, verified := handler.forwardAccepted(ctx, accepted)
+			if verified {
+				markSpoolFileDelivered(spoolResponse.WrittenFilePath)
 			}
 			return true
 		}
-		forwardTransport := handler.forwardDeliveryTransport()
-		if forwardTransport == nil {
-			return false
-		}
-		forwardResponse, err := forwardTransport.Send(ctx, transport.Request{ProjectToken: handler.options.ProjectToken, Events: accepted})
-		return err == nil && forwardResponse.StatusCode >= 200 && forwardResponse.StatusCode < 300
+		delivered, _ := handler.forwardAccepted(ctx, accepted)
+		return delivered
 	default:
 		return true
 	}
@@ -318,7 +339,7 @@ func requestOrigin(request *http.Request) string {
 func setCORSHeaders(writer http.ResponseWriter, origin string) {
 	writer.Header().Set("Access-Control-Allow-Origin", origin)
 	writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	writer.Header().Set("Access-Control-Allow-Headers", "content-type")
+	writer.Header().Set("Access-Control-Allow-Headers", "content-type,x-debugbundle-evidence")
 	writer.Header().Set("Access-Control-Max-Age", "600")
 	writer.Header().Set("Vary", "Origin")
 }
@@ -369,7 +390,7 @@ func sanitizeEvent(candidate map[string]any, options Options) (map[string]any, e
 		"payload":        payload,
 	}
 	stripSensitiveHeaders(payload)
-	protected, err := redaction.ProtectTelemetry(map[string]any{"payload": payload, "service": service}, nil)
+	protected, err := redaction.ProtectTelemetry(map[string]any{"payload": payload, "service": service, "context": candidate["context"]}, nil)
 	if err != nil {
 		return nil, errInvalidBrowserRelayPayload
 	}
@@ -387,11 +408,26 @@ func sanitizeEvent(candidate map[string]any, options Options) (map[string]any, e
 	}
 	sanitized["payload"] = protectedPayload
 	sanitized["service"] = protectedService
+	if context, ok := protectedFields["context"].(map[string]any); ok && len(context) > 0 {
+		sanitized["context"] = context
+	}
 	if correlation, ok := candidate["correlation"].(map[string]any); ok {
 		keptCorrelation := keepCorrelationFields(correlation, eventType)
 		if len(keptCorrelation) > 0 {
 			sanitized["correlation"] = keptCorrelation
 		}
+	}
+	if hasTypedEvidence(candidate) {
+		for _, field := range []string{"runtime", "framework"} {
+			if protectedService[field] == nil {
+				delete(protectedService, field)
+			}
+		}
+		normalized, err := evidence.CopyJSON(sanitized)
+		if err != nil || !evidence.Validate(normalized) {
+			return nil, errInvalidBrowserRelayPayload
+		}
+		sanitized = normalized
 	}
 	return sanitized, nil
 }
@@ -441,7 +477,7 @@ func markSpoolFileDelivered(path string) {
 		return
 	}
 	markerPath := path + relayDeliveredMarkerSuffix
-	file, err := os.OpenFile(markerPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(markerPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

@@ -5,7 +5,9 @@ type EventOption interface {
 }
 
 type eventOptions struct {
-	context map[string]any
+	context      map[string]any
+	failureRef   string
+	failureScope *EvidenceScope
 }
 
 type eventOptionFunc func(*eventOptions)
@@ -47,5 +49,20 @@ func (funcOption probeOptionFunc) applyProbe(options *probeOptions) {
 func WithHeavyProbe() ProbeOption {
 	return probeOptionFunc(func(options *probeOptions) {
 		options.heavy = true
+	})
+}
+
+// WithFailureReference attaches an explicit fresh UUID v4 to the current owned
+// operation, or to an explicitly supplied page/operation scope.
+func WithFailureReference(reference string, scopes ...EvidenceScope) EventOption {
+	return eventOptionFunc(func(options *eventOptions) {
+		if !validEvidenceID(reference) {
+			return
+		}
+		options.failureRef = reference
+		if len(scopes) == 1 {
+			scope := scopes[0]
+			options.failureScope = &scope
+		}
 	})
 }

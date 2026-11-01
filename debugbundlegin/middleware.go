@@ -1,7 +1,6 @@
 package debugbundlegin
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +12,8 @@ func Middleware(client *debugbundle.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		startedAt := time.Now()
 		ctx := client.ContextForRequest(c.Request)
+		ctx, endOperation := client.BeginOperation(ctx, debugbundle.OperationOptions{Kind: "request"})
+		defer endOperation()
 		c.Request = c.Request.WithContext(ctx)
 		defer func() {
 			response := debugbundle.ResponseInfo{
@@ -24,7 +25,7 @@ func Middleware(client *debugbundle.Client) gin.HandlerFunc {
 				if response.StatusCode < 500 {
 					response.StatusCode = 500
 				}
-				client.CaptureException(ctx, fmt.Errorf("panic recovered: %v", recovered))
+				client.CapturePanic(ctx, recovered)
 				client.CaptureRequest(ctx, c.Request, response)
 				panic(recovered)
 			}

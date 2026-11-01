@@ -1,7 +1,6 @@
 package debugbundleecho
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 
@@ -15,6 +14,8 @@ func Middleware(client *debugbundle.Client) echo.MiddlewareFunc {
 		return func(c echo.Context) (err error) {
 			startedAt := time.Now()
 			ctx := client.ContextForRequest(c.Request())
+			ctx, endOperation := client.BeginOperation(ctx, debugbundle.OperationOptions{Kind: "request"})
+			defer endOperation()
 			c.SetRequest(c.Request().WithContext(ctx))
 			defer func() {
 				if recovered := recover(); recovered != nil {
@@ -27,7 +28,7 @@ func Middleware(client *debugbundle.Client) echo.MiddlewareFunc {
 						Duration:   time.Since(startedAt),
 						Route:      c.Path(),
 					}
-					client.CaptureException(ctx, fmt.Errorf("panic recovered: %v", recovered))
+					client.CapturePanic(ctx, recovered)
 					client.CaptureRequest(ctx, c.Request(), response)
 					panic(recovered)
 				}

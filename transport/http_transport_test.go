@@ -133,7 +133,7 @@ func (failingReadCloser) Close() error {
 
 func TestHTTPTransportRejectsTruncatedAcknowledgement(t *testing.T) {
 	client := NewHTTPTransport("https://example.invalid", time.Second)
-	for _, size := range []int{1 << 20, (1 << 20) + 1} {
+	for _, size := range []int{262144, (262144) + 1} {
 		body := `{"accepted":1,"rejected":0,"errors":[]}`
 		body += strings.Repeat(" ", size-len(body))
 		client.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -141,12 +141,27 @@ func TestHTTPTransportRejectsTruncatedAcknowledgement(t *testing.T) {
 				Body: io.NopCloser(strings.NewReader(body))}, nil
 		})
 		response, err := client.Send(context.Background(), Request{})
-		if size > 1<<20 {
+		if size > 262144 {
 			if err == nil || len(response.Body) != 0 {
 				t.Fatal("oversized body must not expose a valid truncated acknowledgement")
 			}
 		} else if err != nil || len(response.Body) != size {
 			t.Fatal("body at the limit must remain supported")
 		}
+	}
+}
+
+func TestNativeAcknowledgementIsBoundedToTheEvidenceReplyBudget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Accept-Encoding") != "identity" || request.Header.Get("X-DebugBundle-Evidence") != "1" {
+			t.Error("missing native negotiation headers")
+		}
+		writer.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(writer, strings.Repeat("x", 262145))
+	}))
+	defer server.Close()
+	sender := NewHTTPTransport(server.URL, time.Second)
+	if _, err := sender.Send(context.Background(), Request{ProjectToken: "synthetic", Events: []json.RawMessage{json.RawMessage(`{}`)}}); err == nil {
+		t.Fatal("oversized evidence reply accepted")
 	}
 }

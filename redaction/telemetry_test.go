@@ -124,6 +124,27 @@ func TestProtocolIdentityValuesAreChecked(t *testing.T) {
 	}
 }
 
+func TestConcurrentCustomPoliciesKeepLiteralLabelsAndIndependentState(t *testing.T) {
+	for _, fixture := range []struct {
+		field, expected string
+	}{
+		{"account.code", "account.code=[REDACTED] accountXcode=public business_code=business password=[REDACTED]"},
+		{"business_code", "account.code=account accountXcode=public business_code=[REDACTED] password=[REDACTED]"},
+	} {
+		fixture := fixture
+		t.Run(fixture.field, func(t *testing.T) {
+			t.Parallel()
+			for iteration := 0; iteration < 20; iteration++ {
+				input := map[string]any{"message": "account.code=account accountXcode=public business_code=business password=secret"}
+				result, err := ProtectTelemetry(input, []string{fixture.field})
+				if err != nil || result.(map[string]any)["message"] != fixture.expected {
+					t.Fatalf("custom policy changed or leaked: %v, %v", result, err)
+				}
+			}
+		})
+	}
+}
+
 type callbackTelemetryMarshaler struct{ calls *int }
 
 func (value callbackTelemetryMarshaler) MarshalJSON() ([]byte, error) {

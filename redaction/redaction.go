@@ -63,6 +63,7 @@ func (redactor *Redactor) Redact(value any) any {
 	return redactor.redactValue(reflect.ValueOf(value), 0, "", map[visitKey]struct{}{}, &visitedNodes)
 }
 
+// Track the active traversal path: repeated data and empty slice storage are not cycles.
 const maxRedactionNodes = 2_048
 
 type visitKey struct {
@@ -92,6 +93,7 @@ func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string
 					return "[Circular]"
 				}
 				visited[identifier] = struct{}{}
+				defer delete(visited, identifier)
 			}
 		}
 		value = value.Elem()
@@ -124,6 +126,7 @@ func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string
 					return "[Circular]"
 				}
 				visited[identifier] = struct{}{}
+				defer delete(visited, identifier)
 			}
 		}
 		limit := value.Len()
@@ -145,6 +148,7 @@ func (redactor *Redactor) redactValue(value reflect.Value, depth int, key string
 				return "[Circular]"
 			}
 			visited[identifier] = struct{}{}
+			defer delete(visited, identifier)
 		}
 		result := map[string]any{}
 		iter := value.MapRange()

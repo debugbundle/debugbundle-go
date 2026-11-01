@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
+	"fmt"
+	"github.com/debugbundle/debugbundle-go/v3/internal/evidence"
 	"math"
 	"net/http"
 	"strconv"
@@ -34,24 +34,27 @@ func (transport *HTTPTransport) Send(ctx context.Context, request Request) (Resp
 	if err != nil {
 		return Response{}, err
 	}
+	if len(body) > evidence.MaxBodyBytes {
+		return Response{}, fmt.Errorf("ingestion request exceeds byte limit")
+	}
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, transport.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return Response{}, err
 	}
 	httpRequest.Header.Set("Authorization", "Bearer "+request.ProjectToken)
 	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("X-DebugBundle-Evidence", "1")
+	httpRequest.Header.Set("Accept-Encoding", "identity")
 	httpResponse, err := transport.client.Do(httpRequest)
 	if err != nil {
 		return Response{}, err
 	}
 	defer func() { _ = httpResponse.Body.Close() }()
-	responseBody, readErr := io.ReadAll(io.LimitReader(httpResponse.Body, (1<<20)+1))
+	responseBody, readErr := evidence.ReadResponse(httpResponse)
 	if readErr != nil {
 		return Response{}, readErr
 	}
-	if len(responseBody) > 1<<20 {
-		return Response{}, errors.New("ingestion response exceeds size limit")
-	}
+
 	return Response{
 		StatusCode: httpResponse.StatusCode,
 		RetryAfter: boundedRetryAfter(httpResponse.Header.Get("Retry-After")),

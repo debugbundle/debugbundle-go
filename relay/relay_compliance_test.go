@@ -12,6 +12,7 @@ import (
 	"time"
 
 	debugbundle "github.com/debugbundle/debugbundle-go/v3"
+	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
 type relayComplianceFixtureSuite struct {
@@ -135,7 +136,7 @@ func TestRelayComplianceLocalOnlyWrite(t *testing.T) {
 func TestRelayComplianceConnectedDurableSpool(t *testing.T) {
 	fixture := relayComplianceFixture(t, "connected-durable-spool")
 	spoolDir := t.TempDir()
-	forwarder := &recordingTransport{}
+	forwarder := &recordingTransport{response: transport.Response{StatusCode: 202, Body: json.RawMessage(`{"accepted":1,"rejected":0,"errors":[]}`)}}
 	options := relayOptionsFromFixture(fixture.RelayOptions)
 	options.SpoolDir = spoolDir
 	options.Transport = forwarder

@@ -1,0 +1,46 @@
+package main
+
+import (
+ "context"
+ "encoding/json"
+ "errors"
+ "net/http"
+ "net/http/httptest"
+ "sync"
+ "time"
+
+ debugbundle "github.com/debugbundle/debugbundle-go/v3"
+ "github.com/debugbundle/debugbundle-go/v3/transport"
+)
+
+func verifyEvidenceFlow() {
+ var mu sync.Mutex
+ events:=[]map[string]any{}
+ proof:=&debugbundle.EvidenceCapabilities{Version:1,Features:[]string{"exception_evidence_v1","recovery_v1"}}
+ server:=httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter,request *http.Request){
+  var body struct{Events []map[string]any `json:"events"`};if json.NewDecoder(request.Body).Decode(&body)!=nil{failf("evidence smoke received invalid JSON")}
+  mu.Lock();events=append(events,body.Events...);mu.Unlock()
+  _=json.NewEncoder(writer).Encode(map[string]any{"accepted":len(body.Events),"rejected":0,"errors":[]any{},"evidence_capabilities":proof})
+ }));defer server.Close()
+ hooks:=0
+ client:=debugbundle.New(debugbundle.Config{ProjectToken:"synthetic-evidence",Environment:"test",Transport:transport.NewHTTPTransport(server.URL,time.Second),CaptureRecoveryObservations:true,EvidenceCapabilities:proof,BeforeSend:func(event debugbundle.EventEnvelope)*debugbundle.EventEnvelope{hooks++;return &event}});defer client.Close()
+ const failure="11111111-1111-4111-8111-111111111111"
+ const attempt="22222222-2222-4222-8222-222222222222"
+ result:=errors.New("exact callback result")
+ returned:=client.RunWithOperationContext(context.Background(),debugbundle.OperationOptions{Kind:"job",Name:"evidence.smoke"},func(ctx context.Context)error{
+  client.CaptureException(ctx,errors.Join(errors.New("first"),errors.New("second")),debugbundle.WithFailureReference(failure))
+  client.CaptureRecovery(ctx,debugbundle.RecoveryObservation{FailureRef:failure,AttemptID:attempt,State:"attempt_completed",StatusCode:200})
+  client.CaptureRecovery(ctx,debugbundle.RecoveryObservation{FailureRef:failure,AttemptID:attempt,State:"recovery_observed"})
+  client.CapturePanic(ctx,"fictional panic")
+  return result
+ });if returned!=result{failf("operation changed callback error")}
+ _=client.Flush(context.Background())
+ mu.Lock();defer mu.Unlock()
+ if len(events)!=4||hooks!=3{failf("evidence smoke lost events or invoked fatal hook: events=%d hooks=%d",len(events),hooks)}
+ payload:=events[0]["payload"].(map[string]any);graph,_:=payload["exception_evidence"].(map[string]any)
+ if graph==nil||len(graph["nodes"].([]any))!=3||payload["execution"]==nil{failf("native graph or owned execution unavailable")}
+ reference:=events[0]["context"].(map[string]any)["evidence_reference"].(map[string]any)
+ scope,_:=json.Marshal(reference["scope"])
+ for index,state:=range []string{"attempt_completed","recovery_observed"}{observation:=events[index+1]["payload"].(map[string]any);actual,_:=json.Marshal(observation["scope"]);if string(scope)!=string(actual)||observation["state"]!=state{failf("recovery changed scope or inferred success from HTTP")}}
+ if events[3]["payload"].(map[string]any)["handled"]!=false{failf("panic lost unhandled state")}
+}

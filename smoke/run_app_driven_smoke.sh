@@ -24,11 +24,19 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-REQUIRE_VERSION="v3.0.1"
+REQUIRE_VERSION="v3.1.0"
 REPLACE_DIRECTIVE="replace ${MODULE_PATH} => ${REPO_ROOT}"
 
 case "$SOURCE" in
 	local)
+		;;
+	artifact)
+		# Only this unpublished module bypasses the public checksum registry.
+		# All ordinary dependencies retain normal module verification.
+		test -s "$REPO_ROOT/.tmp/evidence-module-proxy/$MODULE_PATH/@v/$REQUIRE_VERSION.zip"
+		REPLACE_DIRECTIVE=""
+		export GOPROXY="file://$REPO_ROOT/.tmp/evidence-module-proxy,https://proxy.golang.org"
+		export GONOSUMDB="$MODULE_PATH"
 		;;
 	published)
 		if [ -z "$VERSION" ]; then
@@ -53,10 +61,14 @@ case "$SOURCE" in
 		;;
 esac
 
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT INT TERM
+SMOKE_TEMP_DIRECTORY=$(mktemp -d)
+trap 'rm -rf "$SMOKE_TEMP_DIRECTORY"' EXIT INT TERM
+if [ "$SOURCE" = "artifact" ]; then
+	# Never accept a cached published module with the candidate's version number.
+	export GOMODCACHE="$SMOKE_TEMP_DIRECTORY/module-cache"
+fi
 
-APP_DIR="$TMPDIR/app"
+APP_DIR="$SMOKE_TEMP_DIRECTORY/app"
 mkdir -p "$APP_DIR"
 
 cat >"$APP_DIR/go.mod" <<EOF
@@ -80,6 +92,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 
@@ -94,6 +107,7 @@ type ingestionBatch struct {
 }
 
 func main() {
+ verifyEvidenceFlow()
 	const projectToken = "dbundle_proj_smoke"
 	const backendTraceID = "trace-smoke-backend"
 	const backendRequestID = "req-smoke-backend"
@@ -307,9 +321,7 @@ func main() {
 				assertService(event, "smoke-web", "test")
 				assertCorrelation(event, browserTraceID, "browser-request-should-pass")
 				assertNoSmuggledCorrelation(event, "project_token", "organization_id", "unexpected_payload")
-				if _, ok := event["project_token"]; ok {
-					failf("expected relay-forwarded browser event to omit project_token")
-				}
+				assertProjectToken(event, projectToken)
 				payload, ok := event["payload"].(map[string]any)
 				if !ok {
 					failf("expected frontend_exception payload to be an object")
@@ -397,12 +409,13 @@ func failf(format string, args ...any) {
 }
 
 func init() {
-	if strings.TrimSpace(debugbundle.Version) == "" {
-		failf("expected sdk version to be non-empty")
+	if expected := os.Getenv("SMOKE_EXPECTED_SDK_VERSION"); expected == "" || debugbundle.Version != expected {
+		failf("expected exact sdk version %q, got %q", expected, debugbundle.Version)
 	}
 }
 EOF
 
+cp "$REPO_ROOT/smoke/evidence_smoke.go.txt" "$APP_DIR/evidence.go"
 cd "$APP_DIR"
 go mod tidy
-go run .
+SMOKE_EXPECTED_SDK_VERSION="${REQUIRE_VERSION#v}" go run .

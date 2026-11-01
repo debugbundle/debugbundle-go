@@ -16,8 +16,11 @@ const (
 )
 
 func ContextWithValue(ctx context.Context, key string, value any) context.Context {
-	values := ContextValues(ctx)
+	values, lease := captureContextValues(ctx)
 	values[key] = value
+	if lease != nil {
+		return context.WithValue(ctx, contextValuesKey, operationContextValues{values, lease})
+	}
 	return context.WithValue(ctx, contextValuesKey, values)
 }
 
@@ -36,15 +39,25 @@ func ContextWithTraceID(ctx context.Context, value string) context.Context {
 }
 
 func ContextValues(ctx context.Context) map[string]any {
+	values, _ := captureContextValues(ctx)
+	return values
+}
+func captureContextValues(ctx context.Context) (map[string]any, *operationLease) {
 	if ctx == nil {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
-	if values, ok := ctx.Value(contextValuesKey).(map[string]any); ok {
-		cloned := map[string]any{}
-		maps.Copy(cloned, values)
-		return cloned
+	var values map[string]any
+	var lease *operationLease
+	switch stored := ctx.Value(contextValuesKey).(type) {
+	case map[string]any:
+		values = stored
+	case operationContextValues:
+		values = stored.values
+		lease = stored.lease
 	}
-	return map[string]any{}
+	cloned := map[string]any{}
+	maps.Copy(cloned, values)
+	return cloned, lease
 }
 
 func TraceIDFromContext(ctx context.Context) string {

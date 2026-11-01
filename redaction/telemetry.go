@@ -34,7 +34,7 @@ type telemetryWork struct {
 	nodes      int
 	textBytes  int
 	fields     map[string]struct{}
-	extra      []string
+	extra      []*regexp.Regexp
 	assignment *regexp.Regexp
 }
 
@@ -52,6 +52,7 @@ func ProtectTelemetry(value any, additionalFields []string) (protected any, fail
 		return nil, ErrUnsafeTelemetry
 	}
 	fields := map[string]struct{}{}
+	extra := make([]*regexp.Regexp, 0, len(additionalFields))
 	labels := append([]string{}, DefaultSensitiveFields...)
 	labels = append(labels, "client_secret", "x_api_key", "accessToken", "refreshToken", "privateKey", "clientSecret")
 	for _, field := range DefaultSensitiveFields {
@@ -62,9 +63,16 @@ func ProtectTelemetry(value any, additionalFields []string) (protected any, fail
 			return nil, ErrUnsafeTelemetry
 		}
 		fields[canonicalKey(field)] = struct{}{}
+		// Compile each bounded caller rule once per operation, never per scalar.
+		// Keeping this local prevents cross-client policy sharing or an unbounded cache.
+		pattern, err := regexp.Compile(`(?i)\b(` + regexp.QuoteMeta(field) + `)\b(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;]+)`)
+		if err != nil {
+			return nil, ErrUnsafeTelemetry
+		}
+		extra = append(extra, pattern)
 	}
 	assignment := regexp.MustCompile(`(?i)\b(` + strings.Join(labels, "|") + `)\b(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;]+)`)
-	work := telemetryWork{fields: fields, extra: additionalFields, assignment: assignment}
+	work := telemetryWork{fields: fields, extra: extra, assignment: assignment}
 	if err := checkTelemetryInput(value); err != nil {
 		return nil, err
 	}
@@ -274,11 +282,8 @@ func (work *telemetryWork) scrubTextValue(input string, scanURLs bool) string {
 	output = telemetryBearer.ReplaceAllString(output, `${1} [REDACTED]`)
 	output = telemetryToken.ReplaceAllString(output, redactedMarker)
 	output = work.assignment.ReplaceAllString(output, `${1}${2}[REDACTED]`)
-	for _, field := range work.extra {
-		pattern, err := regexp.Compile(`(?i)\b(` + regexp.QuoteMeta(field) + `)\b(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;]+)`)
-		if err == nil {
-			output = pattern.ReplaceAllString(output, `${1}${2}[REDACTED]`)
-		}
+	for _, pattern := range work.extra {
+		output = pattern.ReplaceAllString(output, `${1}${2}[REDACTED]`)
 	}
 	cardRanges := telemetryCard.FindAllStringIndex(output, -1)
 	for index := len(cardRanges) - 1; index >= 0; index-- {

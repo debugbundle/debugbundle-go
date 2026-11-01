@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+- Prepare the 3.1.0 evidence source candidate with canonical owned hook validation,
+  native cause/join snapshots on the existing bounded renderer, explicit capture
+  provenance, per-destination proof and legacy-compatible ACK downgrade.
+- Bound native config/ACK replies and final request bytes; retain finalized tails
+  without repeating hooks and preserve the latest primary after optional privacy failure.
+- Correct active-path redaction so repeated maps/empty slices remain valid data while
+  actual cycles stay bounded. Preserve local-file policy/probe polling and require
+  an explicit reader pin for local evidence support.
+- Add revocable native operation contexts, opt-in explicit recovery with charged bounded
+  receipts, and a hook-free bounded panic path used by all existing middleware.
+- Preserve canonical browser evidence/context, negotiate existing ACK support, split
+  final server-credential bytes and require complete acceptance for private spool markers.
+- Compile bounded custom privacy patterns once per protection operation instead of
+  per text value; keep policy state local and preserve literal-field matching.
+- Add evidence-off/on allocation, capture-time and queue-pressure comparisons, and
+  clean installation of deterministic unpublished module archives on supported runtimes.
+- Whole-phase qualification and separate release authority remain open.
+
+
 ## [3.0.1] - 2026-09-26
 
 ### Fixed

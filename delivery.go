@@ -45,7 +45,9 @@ func (client *Client) flushNow(ctx context.Context) {
 		client.mu.Lock()
 		client.flushActive = false
 		if !client.closed && (len(client.buffer) > 0 || client.pressureDrops > 0) {
-			client.scheduleFlushLocked(false)
+			_, native := client.transport.(*transport.HTTPTransport)
+			immediate := native && client.status == StatusHealthy && len(client.buffer) > 0 && client.buffer[0].finalized && client.retryUntil.IsZero()
+			client.scheduleFlushLocked(immediate)
 		}
 		client.mu.Unlock()
 	}()
@@ -130,6 +132,9 @@ func (client *Client) flushNow(ctx context.Context) {
 		client.inFlightCount--
 		client.inFlightBytes -= len(event.encoded)
 		batch[index] = queuedEvent{}
+		if client.closed {
+			keep = false
+		}
 		if keep {
 			for client.inFlightCount+len(client.buffer) >= maxPendingEvents ||
 				client.inFlightBytes+client.bufferBytes+len(prepared.encoded) > maxPendingBytes {
@@ -137,7 +142,9 @@ func (client *Client) flushNow(ctx context.Context) {
 					continue
 				}
 				keep = false
-				client.recordPressureDropLocked(1)
+				if prepared.diagnosticID == "" && event.diagnosticID == "" {
+					client.recordPressureDropLocked(1)
+				}
 				break
 			}
 			if keep {
@@ -146,13 +153,26 @@ func (client *Client) flushNow(ctx context.Context) {
 				client.inFlightBytes += len(prepared.encoded)
 			}
 		}
+		if !keep {
+			client.diagnosticBudget.release(event.diagnosticID)
+			client.diagnosticBudget.release(prepared.diagnosticID)
+		}
 		client.mu.Unlock()
 	}
-	batch = finalized
+	batch = client.nativeBatchPrefix(finalized)
 	if len(batch) == 0 {
 		return
 	}
 
+	client.mu.Lock()
+	if client.closed {
+		client.releaseDiagnosticEventsLocked(batch)
+		client.inFlightCount = 0
+		client.inFlightBytes = 0
+		client.mu.Unlock()
+		return
+	}
+	client.mu.Unlock()
 	wireEvents := make([]json.RawMessage, len(batch))
 	for index, event := range batch {
 		wireEvents[index] = event.encoded
@@ -167,6 +187,10 @@ func (client *Client) flushNow(ctx context.Context) {
 	defer client.mu.Unlock()
 	client.inFlightCount = 0
 	client.inFlightBytes = 0
+	if client.closed {
+		client.releaseDiagnosticEventsLocked(batch)
+		return
+	}
 	if err != nil {
 		client.restoreLocked(batch)
 		client.failures++
@@ -185,12 +209,17 @@ func (client *Client) flushNow(ctx context.Context) {
 		return
 	}
 	if response.StatusCode >= http.StatusBadRequest {
+		client.releaseDiagnosticEventsLocked(batch)
 		client.status = StatusHealthy
 		client.failures = 0
 		return
 	}
 	_, requiresAcknowledgement := client.transport.(*transport.HTTPTransport)
 	acknowledgement := decideIngestionAcknowledgement(response.Body, len(batch), requiresAcknowledgement)
+	lost := false
+	if client.evidence != nil {
+		lost = client.evidence.ObserveBody(response.Body, requiresAcknowledgement, acknowledgement.kind == "acknowledged")
+	}
 	if acknowledgement.kind == "protocol_failure" {
 		client.restoreLocked(batch)
 		client.failures++
@@ -207,6 +236,25 @@ func (client *Client) flushNow(ctx context.Context) {
 		for _, index := range acknowledgement.retryableIndices {
 			if index >= 0 && index < len(batch) {
 				retryableEvents = append(retryableEvents, batch[index])
+			}
+		}
+		if lost {
+			for _, rejection := range acknowledgement.terminalErrors {
+				if rejection.Reason != "invalid_event" || rejection.Index < 0 || rejection.Index >= len(batch) {
+					continue
+				}
+				if reduced, ok := client.downgradeRejectedEvidence(batch[rejection.Index]); ok {
+					retryableEvents = append(retryableEvents, reduced)
+				}
+			}
+		}
+		retained := map[string]bool{}
+		for _, event := range retryableEvents {
+			retained[event.diagnosticID] = true
+		}
+		for _, event := range batch {
+			if !retained[event.diagnosticID] {
+				client.diagnosticBudget.release(event.diagnosticID)
 			}
 		}
 		client.restoreLocked(retryableEvents)
@@ -234,6 +282,7 @@ func (client *Client) flushNow(ctx context.Context) {
 		client.status = StatusHealthy
 		return
 	}
+	client.releaseDiagnosticEventsLocked(batch)
 	client.status = StatusHealthy
 	client.failures = 0
 	successAt := time.Now().UTC()
@@ -316,10 +365,13 @@ func (client *Client) evictLowPriorityLocked() bool {
 		if event.highPriority {
 			continue
 		}
+		client.diagnosticBudget.release(event.diagnosticID)
 		client.bufferBytes -= len(event.encoded)
 		client.buffer = append(client.buffer[:index], client.buffer[index+1:]...)
 		client.pendingLowPriority--
-		client.recordPressureDropLocked(1)
+		if event.diagnosticID == "" {
+			client.recordPressureDropLocked(1)
+		}
 		return true
 	}
 	return false
@@ -330,7 +382,10 @@ func (client *Client) restoreLocked(events []queuedEvent) {
 		event := events[index]
 		for len(client.buffer) >= maxPendingEvents || client.bufferBytes+len(event.encoded) > maxPendingBytes {
 			if !event.highPriority || !client.evictLowPriorityLocked() {
-				client.recordPressureDropLocked(1)
+				client.diagnosticBudget.release(event.diagnosticID)
+				if event.diagnosticID == "" {
+					client.recordPressureDropLocked(1)
+				}
 				goto nextEvent
 			}
 		}
