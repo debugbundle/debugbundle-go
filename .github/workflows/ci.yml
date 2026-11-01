@@ -65,10 +65,9 @@ jobs:
         run: make mod-check
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9.2.1
-        with:
-          version: v2.13.2
-          working-directory: .
+        # Keep the linter and its compiler/export-data reader together, matching
+        # the verified local gate even when setup-go installs a newer compiler.
+        run: make lint-docker
 
   smoke:
     runs-on: ubuntu-latest
