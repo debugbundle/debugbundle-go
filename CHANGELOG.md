@@ -1,4 +1,7 @@
-## [Unreleased]
+## [3.1.1] - 2026-11-06
+
+- Preserve native error/err/exception fields in slog and zap error records through exception capture. Serialized zerolog records remain logs; native throw location/identity cannot be reconstructed from JSON.
+- Existing event schemas remain compatible; complete exception inputs may create new future fingerprints. Consumer installations require an explicit upgrade.
 
 ## [3.1.0] - 2026-11-01
 

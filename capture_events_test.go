@@ -2,12 +2,30 @@ package debugbundle
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"github.com/debugbundle/debugbundle-go/v3/transport"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestNativeLoggedErrorKeepsCauseInsteadOfGenericLog(t *testing.T) {
+	recorder := &recordingTransport{response: transport.Response{StatusCode: 202}}
+	client := New(Config{ProjectToken: "synthetic", Transport: recorder, BatchSize: 1000, FlushInterval: time.Hour})
+	defer func() { _ = client.Close() }()
+	client.CaptureLog(context.Background(), "operation failed", LevelError,
+		map[string]any{"error": fmt.Errorf("synthetic outer: %w", errors.New("synthetic inner"))})
+	client.CaptureLog(context.Background(), "ordinary error", LevelError, nil)
+	_ = client.Flush(context.Background())
+	if len(recorder.requests) != 1 || len(recorder.requests[0].Events) != 2 {
+		t.Fatal("expected one exception and one ordinary log")
+	}
+	if raw := string(recorder.requests[0].Events[0]); !strings.Contains(raw, `"event_type":"backend_exception"`) || !strings.Contains(raw, "synthetic inner") {
+		t.Fatalf("native log lost exception evidence: %s", raw)
+	}
+}
 
 func TestCaptureEntryPointsRetainContextAndHandleInvalidMetadata(t *testing.T) {
 	recorder := &recordingTransport{response: transport.Response{StatusCode: 202}}

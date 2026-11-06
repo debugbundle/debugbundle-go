@@ -86,6 +86,10 @@ func (core *Core) Sync() error {
 func zapFieldsToMap(fields []zapcore.Field) map[string]any {
 	encoder := zapcore.NewMapObjectEncoder()
 	for _, field := range fields {
+		if field.Type == zapcore.ErrorType {
+			encoder.Fields[field.Key] = field.Interface
+			continue
+		}
 		field.AddTo(encoder)
 	}
 	if len(encoder.Fields) == 0 {

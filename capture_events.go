@@ -54,6 +54,20 @@ func (client *Client) CaptureLog(ctx context.Context, message string, level LogL
 	if !client.shouldCaptureLogLevel(level) {
 		return
 	}
+	for _, key := range []string{"error", "err", "exception"} {
+		if native, ok := fields[key].(error); ok && native != nil && (level == LevelError || level == LevelCritical) {
+			contextFields := make(map[string]any, len(fields))
+			for name, value := range fields {
+				if name != key {
+					contextFields[name] = value
+				}
+			}
+			contextFields["log_message"] = message
+			copied := append([]EventOption{}, options...)
+			client.CaptureException(ctx, native, append(copied, WithEventContext(contextFields))...)
+			return
+		}
+	}
 	payload := map[string]any{
 		"message":    message,
 		"level":      normalizeLogLevel(level),

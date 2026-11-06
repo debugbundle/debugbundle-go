@@ -1,5 +1,7 @@
 # DebugBundle Go SDK
 
+Patch 3.1.1 corrects native logger exception evidence and capture safety while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the correction.
+
 DebugBundle for Go captures backend exceptions, request failures, structured logs, probe data, and browser relay traffic with instance-first APIs that fit standard Go services.
 
 ## Evidence in 3.1.0

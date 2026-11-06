@@ -24,7 +24,7 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-REQUIRE_VERSION="v3.1.0"
+REQUIRE_VERSION="v3.1.1"
 REPLACE_DIRECTIVE="replace ${MODULE_PATH} => ${REPO_ROOT}"
 
 case "$SOURCE" in

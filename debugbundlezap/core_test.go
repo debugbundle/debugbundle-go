@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 
 	debugbundle "github.com/debugbundle/debugbundle-go/v3"
@@ -63,5 +65,25 @@ func TestZapCoreCapturesStructuredLogs(t *testing.T) {
 	httpFields := fields["http"].(map[string]any)
 	if httpFields["status"].(float64) != 500 {
 		t.Fatalf("expected nested structured zap fields, got %#v", httpFields["status"])
+	}
+}
+
+func TestZapErrorFieldKeepsNativeCauseAsOneException(t *testing.T) {
+	recorder := &recordingTransport{}
+	client := debugbundle.New(debugbundle.Config{ProjectToken: "synthetic", Transport: recorder})
+	logger := zap.New(NewCore(client, nil))
+	logger.Error("operation failed", zap.Error(fmt.Errorf("wrapper: %w", errors.New("native cause"))))
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.requests) != 1 || len(recorder.requests[0].Events) != 1 {
+		t.Fatalf("unexpected events: %#v", recorder.requests)
+	}
+	var event debugbundle.EventEnvelope
+	if err := json.Unmarshal(recorder.requests[0].Events[0], &event); err != nil {
+		t.Fatal(err)
+	}
+	if event.EventType != "backend_exception" || event.Payload["message"] != "wrapper: native cause" {
+		t.Fatalf("lost exception: %#v", event)
 	}
 }
