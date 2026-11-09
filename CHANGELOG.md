@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+## [3.1.2] - 2026-11-09
+
+- Redact standalone organisation invitation and ownership-transfer credentials from free text before retention or transport, using the shared 27-case privacy corpus. Preserve capture APIs, event schemas and supported platform floors.
+- Existing installations adopt this protection when explicitly upgraded.
+
 ## [3.1.1] - 2026-11-06
 
 - Preserve native error/err/exception fields in slog and zap error records through exception capture. Serialized zerolog records remain logs; native throw location/identity cannot be reconstructed from JSON.
