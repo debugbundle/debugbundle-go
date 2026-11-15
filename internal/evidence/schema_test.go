@@ -1,11 +1,63 @@
 package evidence
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"os"
 	"testing"
 )
+
+func TestHookEvidenceReductionPreservesShapeAndOwnedInput(t *testing.T) {
+	data, err := os.ReadFile("testdata/before-send-budget.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Cases []struct {
+			ID      string         `json:"id"`
+			Event   map[string]any `json:"event"`
+			Outcome string         `json:"outcome"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range corpus.Cases {
+		t.Run(fixture.ID, func(t *testing.T) {
+			before, _ := json.Marshal(fixture.Event)
+			fitted := FitHookEvidence(fixture.Event)
+			after, _ := json.Marshal(fixture.Event)
+			if !bytes.Equal(before, after) {
+				t.Fatal("reduction mutated the owned hook input")
+			}
+			if fixture.Outcome == "fallback" {
+				encoded, _ := json.Marshal(fitted)
+				if !bytes.Equal(before, encoded) || Validate(fitted) {
+					t.Fatal("malformed optional evidence was repaired")
+				}
+				return
+			}
+			if !Validate(fitted) {
+				t.Fatal("fitted hook evidence is invalid")
+			}
+			if fixture.Outcome != "reduce" {
+				return
+			}
+			for _, field := range []string{"exception_evidence", "execution", "resource_observations"} {
+				if _, exists := object(fixture.Event["payload"])[field]; !exists {
+					continue
+				}
+				if _, exists := object(fitted["payload"])[field]; exists {
+					t.Fatalf("%s was retained", field)
+				}
+				if object(object(fitted["context"])["evidence_limits"])[field] != "budget_exceeded" {
+					t.Fatalf("%s lacks a reduction marker", field)
+				}
+			}
+		})
+	}
+}
 
 func TestSharedCanonicalEvidenceCorpus(t *testing.T) {
 	data, err := os.ReadFile("testdata/evidence-wire-cases.json")

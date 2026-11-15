@@ -13,7 +13,23 @@ import (
  "github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
+type diagnosticSmokeError struct{}
+func (diagnosticSmokeError) Error() string { panic("diagnostic renderer must not run") }
+type diagnosticSmokeFetcher struct{}
+func (diagnosticSmokeFetcher) Fetch(context.Context, debugbundle.RemoteConfigRequest) (debugbundle.RemoteConfigResponse,error) {
+ return debugbundle.RemoteConfigResponse{}, diagnosticSmokeError{}
+}
+func verifyInstalledDiagnostics() {
+ client := debugbundle.Init(debugbundle.Config{ProjectToken:"synthetic-diagnostic", RemoteConfigFetcher:diagnosticSmokeFetcher{}, ProjectMode:debugbundle.ProjectModeLocalOnly})
+ defer client.Close()
+ deadline:=time.Now().Add(time.Second)
+ for len(debugbundle.Diagnostics())==0 && time.Now().Before(deadline) { time.Sleep(time.Millisecond) }
+ values:=debugbundle.Diagnostics()
+ if len(values)!=1 || values[0]!="remote_config_failed" { failf("installed diagnostic lost bounded failure code") }
+}
+
 func verifyEvidenceFlow() {
+ verifyInstalledDiagnostics()
  var mu sync.Mutex
  events:=[]map[string]any{}
  proof:=&debugbundle.EvidenceCapabilities{Version:1,Features:[]string{"exception_evidence_v1","recovery_v1"}}

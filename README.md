@@ -1,6 +1,6 @@
 # DebugBundle Go SDK
 
-Patch 3.1.3 protects invitation and organisation-transfer credentials in captured text while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the protection.
+Patch 3.1.4 preserves application hook redaction under optional-evidence limits and complete validation. Public capture APIs and event schemas remain compatible.
 
 DebugBundle for Go captures backend exceptions, request failures, structured logs, probe data, and browser relay traffic with instance-first APIs that fit standard Go services.
 
@@ -452,3 +452,17 @@ The SDK scrubs standalone `dbundle_invite_`,
 `dbundle_org_invite_` and `dbundle_org_transfer_` acceptance secrets before
 SDK-owned retention or transmission. See the [shared qualification record](https://github.com/debugbundle/debugbundle/blob/main/spec/business-credential-redaction.md).
 Existing installations receive this protection when upgraded to a version that includes it.
+
+### Hook size limits (unreleased correction)
+
+A hook replacement whose optional exception evidence exceeds the combined 32 KiB
+UTF-8 JSON budget keeps its replacement message and other primary fields. The SDK
+omits the oversized optional evidence and its typed reference, recording
+`context.evidence_limits`. Ordinary custom context remains intact. A size limit
+must not restore text removed by the hook; an otherwise valid replacement that
+cannot fit later ownership or transport limits is withheld. Malformed returns and
+throwing hooks retain the established protected-original fallback.
+
+### Internal SDK diagnostics
+
+Internal diagnostics remain local in the existing `Diagnostics() []string` snapshot, capped at 100 fixed SDK codes. Configuration failures record `remote_config_failed` without invoking application error renderers or retaining raw error text. No separate maintainer-reporting request is made; normal configured ingestion and configuration discovery are unchanged.

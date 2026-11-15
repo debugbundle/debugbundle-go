@@ -10,6 +10,35 @@ import (
 
 var Features = []string{"exception_evidence_v1", "resource_observations_v1", "recovery_v1", "evidence_provenance_v1"}
 
+// FitHookEvidence operates only on bounded owned JSON. Optional byte limits must
+// not turn an application replacement into the pre-hook original.
+func FitHookEvidence(event map[string]any) map[string]any {
+	if event["event_type"] != "backend_exception" && event["event_type"] != "frontend_exception" {
+		return event
+	}
+	additions := map[string]any{}
+	for _, field := range []string{"exception_evidence", "execution", "resource_observations"} {
+		if value, exists := object(event["payload"])[field]; exists {
+			additions[field] = value
+		}
+	}
+	if len(additions) == 0 {
+		return event
+	}
+	if ref := object(event["context"])["evidence_reference"]; Reference(ref) {
+		additions["evidence_reference"] = ref
+	}
+	if Size(additions) <= 32768 {
+		return event
+	}
+	// Only aggregate byte exhaustion is recoverable; malformed optional fields
+	// still select the protected original through the normal validation path.
+	if valid, err := check(event, false); err != nil || !valid {
+		return event
+	}
+	return WithoutOptional(event, true)
+}
+
 func object(value any) map[string]any { result, _ := value.(map[string]any); return result }
 func fresh(value any) bool {
 	text, ok := value.(string)
@@ -40,7 +69,7 @@ func text(value any, maximum int) bool {
 	return ok && len(s) <= maximum
 }
 
-func semanticEvent(event map[string]any) bool {
+func semanticEvent(event map[string]any, checkByteBudget bool) bool {
 	payload := object(event["payload"])
 	kind := event["event_type"]
 	if kind == "frontend_exception" {
@@ -83,7 +112,7 @@ func semanticEvent(event map[string]any) bool {
 		}
 		switch field {
 		case "exception_evidence":
-			if !graph(value) {
+			if !graph(value, checkByteBudget) {
 				return false
 			}
 		case "execution":
@@ -104,10 +133,10 @@ func semanticEvent(event map[string]any) bool {
 	if Reference(reference) {
 		additions["evidence_reference"] = reference
 	}
-	return Size(additions) <= 32768
+	return !checkByteBudget || Size(additions) <= 32768
 }
 
-func graph(value any) bool {
+func graph(value any, checkByteBudget bool) bool {
 	fields := object(value)
 	nodes := fields["nodes"].([]any)
 	adjacency := map[float64][]float64{}
@@ -169,7 +198,7 @@ func graph(value any) bool {
 		delete(active, id)
 		return true
 	}
-	return visit(fields["root_id"].(float64), 0) && len(reached) == len(nodes) && Size(value) <= 32768
+	return visit(fields["root_id"].(float64), 0) && len(reached) == len(nodes) && (!checkByteBudget || Size(value) <= 32768)
 }
 func resources(value any) bool {
 	for _, raw := range object(value)["items"].([]any) {

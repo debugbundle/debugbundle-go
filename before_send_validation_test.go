@@ -3,12 +3,101 @@ package debugbundle
 import (
 	"encoding/json"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
+func TestBeforeSendReducesCombinedEvidenceWithoutRestoringRemovedContent(t *testing.T) {
+	data, err := os.ReadFile("internal/evidence/testdata/evidence-wire-cases.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Events []struct {
+			ID    string        `json:"id"`
+			Event EventEnvelope `json:"event"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(data, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range corpus.Events {
+		if fixture.ID != "combined_optional_bytes" {
+			continue
+		}
+		original := canonicalBeforeSendEvent("log_event", map[string]any{"level": "error", "message": "owner removed", "attributes": map[string]any{}})
+		result, diagnostic := applyBeforeSend(original, func(EventEnvelope) *EventEnvelope {
+			fixture.Event.Payload["message"] = "owner replacement"
+			return &fixture.Event
+		})
+		if result == nil || result.Payload["message"] != "owner replacement" || diagnostic != "" {
+			t.Fatalf("hook redaction lost: %#v %s", result, diagnostic)
+		}
+		if !validBeforeSendEvent(*result) {
+			t.Fatal("reduced event must satisfy the unchanged receiving contract")
+		}
+		if _, exists := result.Payload["exception_evidence"]; exists {
+			t.Fatal("oversized optional evidence retained")
+		}
+		if _, exists := fixture.Event.Payload["exception_evidence"]; !exists {
+			t.Fatal("hook-owned result mutated")
+		}
+		return
+	}
+	t.Fatal("missing shared combined-budget fixture")
+}
+
 type hookForeignJSON struct{ calls *int }
+
+func TestBeforeSendSharedByteBoundaryCases(t *testing.T) {
+	data, err := os.ReadFile("internal/evidence/testdata/before-send-budget.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Original EventEnvelope `json:"original"`
+		Cases    []struct {
+			ID      string        `json:"id"`
+			Event   EventEnvelope `json:"event"`
+			Outcome string        `json:"outcome"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range corpus.Cases {
+		t.Run(fixture.ID, func(t *testing.T) {
+			result, _ := applyBeforeSend(corpus.Original, func(EventEnvelope) *EventEnvelope { return &fixture.Event })
+			if result == nil {
+				t.Fatal("lost admissible primary")
+			}
+			message := "owner replacement"
+			if fixture.Outcome == "fallback" {
+				message = "owner removed"
+			}
+			if result.Payload["message"] != message || !validBeforeSendEvent(*result) {
+				t.Fatal("incorrect hook result")
+			}
+			if fixture.Outcome != "fallback" {
+				_, retained := result.Payload["exception_evidence"]
+				if retained != (fixture.Outcome == "keep") {
+					t.Fatal("incorrect budget reduction")
+				}
+				if result.Context["owner_field"] != "preserved" {
+					t.Fatal("lost custom context")
+				}
+				if strings.HasSuffix(fixture.ID, "-legacy") && result.Context["evidence_reference"] == nil {
+					t.Fatal("lost legacy reference")
+				}
+				if strings.HasSuffix(fixture.ID, "-typed") && fixture.Outcome == "reduce" && result.Context["evidence_reference"] != nil {
+					t.Fatal("orphaned typed reference")
+				}
+			}
+		})
+	}
+}
 
 func (value hookForeignJSON) MarshalJSON() ([]byte, error) {
 	*value.calls++

@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+## [3.1.4] - 2026-11-15
+
+- Record fixed local configuration failure codes without invoking application error renderers, preventing a secondary diagnostic panic and unbounded sensitive error retention. Preserve the Diagnostics API and retry policy.
+
+- Preserve invalid-return fallback when optional evidence is both malformed and oversized; cover mixed evidence fields with the shared hook-budget corpus.
+
+- Preserve application `beforeSend` redaction when optional exception evidence exceeds the combined 32 KiB UTF-8 JSON limit. Reduce optional evidence before invalid-return fallback, retain the replacement primary and ordinary custom context, and remove a related typed reference. Exact-boundary and malformed-return regressions cover the unchanged receiving contract.
+
+
 ## [3.1.3] - 2026-11-15
 
 - Align installation, initialization, integrations, first-event verification and configuration documentation with the shared SDK pattern. Keep credentials, delivery modes and runtime lifecycle requirements explicit.

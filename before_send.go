@@ -34,6 +34,7 @@ func applyBeforeSend(event EventEnvelope, hook BeforeSendFunc) (*EventEnvelope, 
 	if errors.Is(err, evidence.ErrBudget) || errors.Is(err, evidence.ErrUnavailable) {
 		return nil, "before_send_validation_unavailable"
 	}
+	owned = evidence.FitHookEvidence(owned)
 	valid, validationErr := evidence.Check(owned)
 	if validationErr != nil {
 		return nil, "before_send_validation_unavailable"

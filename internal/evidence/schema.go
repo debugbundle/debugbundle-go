@@ -298,6 +298,10 @@ func timestamp(value string) bool {
 
 // Check preserves validation unavailability separately from an invalid envelope.
 func Check(event map[string]any) (valid bool, failure error) {
+	return check(event, true)
+}
+
+func check(event map[string]any, checkByteBudget bool) (valid bool, failure error) {
 	defer func() {
 		if recover() != nil {
 			valid = false
@@ -316,7 +320,7 @@ func Check(event map[string]any) (valid bool, failure error) {
 	if !accepted {
 		return false, nil
 	}
-	return semanticEvent(event), nil
+	return semanticEvent(event, checkByteBudget), nil
 }
 
 // Validate is the fail-closed adapter form for normalized JSON.

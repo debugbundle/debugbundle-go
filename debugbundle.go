@@ -139,7 +139,8 @@ func New(config Config) *Client {
 		go func() {
 			defer close(client.remoteConfigReady)
 			if err := client.RefreshRemoteConfigNow(refreshContext); err != nil {
-				client.recordDiagnostic(err.Error())
+				// Error() is application code too. Never format it on this worker.
+				client.recordDiagnostic("remote_config_failed")
 			}
 		}()
 	} else {
