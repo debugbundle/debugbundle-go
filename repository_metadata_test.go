@@ -56,7 +56,8 @@ func TestReadmeCoversGoReleaseDocumentationGates(t *testing.T) {
 	readme := readRepositoryFile(t, "README.md")
 
 	for _, fragment := range []string{
-		"## Configuration Reference",
+		"## Configuration",
+		"<a id=\"configuration-reference\"></a>",
 		"Configuration sources and precedence:",
 		"Capture-policy fields are server-owned",
 		"## Install Examples by Mode",
@@ -65,7 +66,7 @@ func TestReadmeCoversGoReleaseDocumentationGates(t *testing.T) {
 		"## Browser Relay",
 		"## Service Naming",
 		"## Safe Startup and Status",
-		"## First-Event Verification",
+		"## First-event verification",
 		"make smoke",
 		"same-origin",
 		"allowed origins",
