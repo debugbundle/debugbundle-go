@@ -1,8 +1,165 @@
 # DebugBundle Go SDK
 
-Patch 3.1.2 protects invitation and organisation-transfer credentials in captured text while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the protection.
+Patch 3.1.3 protects invitation and organisation-transfer credentials in captured text while preserving public APIs and event schemas. Upgrade the DebugBundle distribution to adopt the protection.
 
 DebugBundle for Go captures backend exceptions, request failures, structured logs, probe data, and browser relay traffic with instance-first APIs that fit standard Go services.
+
+## Installation
+
+Version 3 changes capture and delivery timing. Existing v2 installations remain on the `github.com/debugbundle/debugbundle-go/v2` module. Install the v3 module with:
+
+```bash
+go get github.com/debugbundle/debugbundle-go/v3
+```
+
+The v1 and v2 import paths and tags remain available. See [MIGRATION-3.0.md](MIGRATION-3.0.md) before updating an installed service.
+
+The root module ships the core client plus optional subpackages for `net/http`, Gin, Echo, `log/slog`, zap, zerolog, and the browser relay handler.
+
+Version 3 rejects logs below the effective threshold before formatting and bounds queued plus in-flight telemetry. Under a full queue, warning traffic yields to exceptions and 5xx request incidents; an all-error overload returns before calling application error renderers. Capture callers drop on brief SDK state-lock contention instead of waiting. See the migration guide for the lossy overload and callback timing contract.
+
+## Initialize
+
+Set `DEBUGBUNDLE_PROJECT_TOKEN` in the server environment and retain the client for your service lifetime. Add the imports to the file’s import block and create the client inside `main` or your bootstrap function. Use a bounded flush during controlled shutdown.
+
+```go
+import (
+    "os"
+    debugbundle "github.com/debugbundle/debugbundle-go/v3"
+)
+
+// Inside application startup:
+client := debugbundle.New(debugbundle.Config{
+    ProjectToken: os.Getenv("DEBUGBUNDLE_PROJECT_TOKEN"),
+    Environment:  "production",
+    Service:      "api",
+})
+```
+
+## Integrations
+
+net/http, Gin, Echo, slog, zap, zerolog and browser relay handlers are supported.
+
+### Browser Relay
+
+Mount the browser relay on the same origin as your frontend:
+
+```go
+mux.Handle("/debugbundle/browser", debugbundlehttp.RelayHandler(client, relay.Options{}))
+```
+
+Relay options:
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `AllowedOrigins` | empty | When unset, the relay enforces same-origin requests only. Set explicit allowed origins for split frontend/backend hosts. |
+| `MaxBodyBytes` | `256 KB` | Maximum accepted request body size. |
+| `RateLimitPerMinute` | `60` | Per-IP rate limiting for relay requests. |
+| `DurableWrite` | `false` unless explicitly enabled in `relay.Options` | In connected mode, write the relay batch to the spool before forwarding. |
+| `TrustForwardedHeader` | `false` | Trust `X-Forwarded-For` for rate limiting and origin inference behind a trusted proxy only. |
+| `ProjectMode` | inherited from the SDK client | Overrides local-only vs connected relay delivery mode. |
+| `ProjectToken` | inherited from the SDK client | Server-side token used for connected forwarding. |
+| `Endpoint` | inherited from the SDK client | Connected forwarding destination. |
+| `LocalEventsDir` | inherited from the SDK client | Local-only relay write destination. |
+| `SpoolDir` | inherited from the SDK client | Connected durable spool destination. |
+| `Service` | empty | Optional override for browser event `service.name`. |
+| `Environment` | empty | Optional override for browser event `service.environment`. |
+| `Transport` | default HTTP or file sender | Advanced override for tests or custom forwarding. |
+
+Relay behavior:
+
+- same-origin is the safe default; use explicit allowed origins when the frontend and backend live on different hosts.
+- Requests must use `Content-Type: application/json`.
+- Browser payloads are schema-checked and only the supported browser event types are accepted.
+- Browser-supplied DebugBundle credentials are stripped before delivery, preserving credential isolation.
+- Local-only mode writes relay batches to `.debugbundle/local/events`.
+- Connected durable mode writes relay batches to `.debugbundle/local/browser-relay-spool`, then forwards them with the server-side project token.
+- Connected forwarding without durable writes sends directly to the configured endpoint.
+- To disable the relay entirely, do not mount the route.
+- A missing token or missing endpoint means connected relay forwarding cannot succeed; treat that as a configuration error and leave the route unmounted until the server-side config is fixed.
+
+### Examples
+
+- net/http app: [examples/nethttp/main.go](examples/nethttp/main.go)
+- Gin app: [examples/gin/main.go](examples/gin/main.go)
+- Echo app: [examples/echo/main.go](examples/echo/main.go)
+
+Attach the client to your framework middleware before serving requests; constructing it alone does not observe every application error. See the [Go integration guide](https://debugbundle.com/docs/sdks/go).
+
+## First-event verification
+
+Use an explicit setup event in a development or staging application, then confirm the matching service and environment in a received event or incident. Initialization, a healthy status and an empty queue are not delivery receipts. Keep the application running long enough for delivery; use bounded flushing only in tests or controlled teardown, never in a request handler.
+
+Use an explicit test exception or message during setup:
+
+```go
+client := debugbundle.New(debugbundle.Config{
+	ProjectToken: os.Getenv("DEBUGBUNDLE_PROJECT_TOKEN"),
+	Service:      "debugbundle-first-event",
+	Environment:  "staging",
+})
+
+client.CaptureException(context.Background(), errors.New("debugbundle first-event verification"))
+_ = client.Flush(context.Background())
+```
+
+Then confirm the event through your mock ingestion endpoint, a staging project, or the DebugBundle CLI verification flow. This repository also ships a clean-install smoke harness that proves both backend and relay delivery through the public module surface:
+
+```bash
+make smoke
+```
+
+To qualify an unpublished candidate as an installed module, use
+`make smoke-module-artifact`. It builds a deterministic module ZIP and installs it
+from a local file proxy into a fresh module cache without a source replacement.
+The smoke verifies the exact SDK version, native HTTP evidence and recovery,
+middleware and browser relay delivery. `.tmp/evidence-artifact-manifest.json`
+records the source and archive hashes; it does not establish publication.
+Use `SMOKE_GO_IMAGE=golang:1.21-bookworm` to repeat on the supported Go floor.
+
+For an already published tag, the release path can also rerun the same app-driven smoke against the published module install:
+
+```bash
+make smoke-published VERSION=3.0.1
+```
+
+For connected delivery, confirm the event in DebugBundle and inspect its incident with the CLI. For local-file delivery, run `debugbundle process` followed by `debugbundle inspect <incident-id>`. A local file or mock endpoint receipt proves only that destination; it does not prove cloud acceptance.
+
+## Configuration
+
+<a id="configuration-reference"></a>
+
+Configuration sources and precedence:
+
+1. Explicit `debugbundle.Config{...}` fields always win.
+2. `Environment` falls back to `DEBUGBUNDLE_ENVIRONMENT`, `APP_ENV`, `ENVIRONMENT`, then `GO_ENV`.
+3. `Service` falls back to the current executable basename.
+4. Built-in defaults apply for endpoint, transport paths, batching, probe buffers, and log level.
+
+Capture-policy fields are server-owned and are not accepted in local SDK config. The SDK learns capture policy through `GET /v1/sdk/config` and applies it locally before transport.
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `ProjectToken` | required for connected mode | Server-side write-only DebugBundle project token. |
+| `Enabled` | `true` when `ProjectToken` is set | Global kill switch. |
+| `Environment` | env auto-detect, then `development` | Service environment name. |
+| `Service` | executable basename, then `go-service` | Service name used in event envelopes. |
+| `Endpoint` | `https://api.debugbundle.com/v1/events` | Connected ingestion endpoint. |
+| `ProjectMode` | `connected` | `connected` or `local-only`. |
+| `LocalEventsDir` | `.debugbundle/local/events` | Local file transport destination. |
+| `SpoolDir` | `.debugbundle/local/browser-relay-spool` | Durable browser relay spool destination. |
+| `BatchSize` | `25` | Max events per flush batch. |
+| `FlushInterval` | `5s` | Max delay before background flush. |
+| `ProbesPollInterval` | `60s` | Remote config and probe polling interval. |
+| `SampleRate` | `1.0` | Per-event sample rate. |
+| `LogLevel` | `warning` | Minimum captured log severity. |
+| `RequestTimeout` | `5s` | HTTP timeout for connected transport and remote config fetches. |
+| `RedactFields` | mandatory baseline plus `[]` additional fields | Additional field names to redact before buffering or transport; these cannot replace the mandatory baseline. |
+| `MaxProbeLabels` | `50` | Max distinct probe labels held in memory. |
+| `MaxProbeEntriesPerLabel` | `10` | Ring-buffer size per probe label. |
+| `ProbeFlushOnError` | `true` | Flush probe buffers with exceptions. |
+| `Transport` | internal default transport | Advanced override for tests or custom senders. |
+| `RemoteConfigFetcher` | default HTTP fetcher in connected mode | Advanced override for tests or custom config fetches. |
 
 ## Evidence in 3.1.0
 
@@ -82,55 +239,6 @@ A custom sender may retain its existing status-only acceptance, but a delivered
 spool marker requires a complete canonical ACK. Marker creation is exclusive and
 private. A stalled custom sender owns one bounded worker until it returns.
 
-
-## Installation
-
-Version 3 changes capture and delivery timing. Existing v2 installations remain on the `github.com/debugbundle/debugbundle-go/v2` module. Install the v3 module with:
-
-```bash
-go get github.com/debugbundle/debugbundle-go/v3@v3.0.1
-```
-
-The v1 and v2 import paths and tags remain available. See [MIGRATION-3.0.md](MIGRATION-3.0.md) before updating an installed service.
-
-The root module ships the core client plus optional subpackages for `net/http`, Gin, Echo, `log/slog`, zap, zerolog, and the browser relay handler.
-
-Version 3 rejects logs below the effective threshold before formatting and bounds queued plus in-flight telemetry. Under a full queue, warning traffic yields to exceptions and 5xx request incidents; an all-error overload returns before calling application error renderers. Capture callers drop on brief SDK state-lock contention instead of waiting. See the migration guide for the lossy overload and callback timing contract.
-
-## Configuration Reference
-
-Configuration sources and precedence:
-
-1. Explicit `debugbundle.Config{...}` fields always win.
-2. `Environment` falls back to `DEBUGBUNDLE_ENVIRONMENT`, `APP_ENV`, `ENVIRONMENT`, then `GO_ENV`.
-3. `Service` falls back to the current executable basename.
-4. Built-in defaults apply for endpoint, transport paths, batching, probe buffers, and log level.
-
-Capture-policy fields are server-owned and are not accepted in local SDK config. The SDK learns capture policy through `GET /v1/sdk/config` and applies it locally before transport.
-
-| Field | Default | Purpose |
-| --- | --- | --- |
-| `ProjectToken` | required for connected mode | Server-side write-only DebugBundle project token. |
-| `Enabled` | `true` when `ProjectToken` is set | Global kill switch. |
-| `Environment` | env auto-detect, then `development` | Service environment name. |
-| `Service` | executable basename, then `go-service` | Service name used in event envelopes. |
-| `Endpoint` | `https://api.debugbundle.com/v1/events` | Connected ingestion endpoint. |
-| `ProjectMode` | `connected` | `connected` or `local-only`. |
-| `LocalEventsDir` | `.debugbundle/local/events` | Local file transport destination. |
-| `SpoolDir` | `.debugbundle/local/browser-relay-spool` | Durable browser relay spool destination. |
-| `BatchSize` | `25` | Max events per flush batch. |
-| `FlushInterval` | `5s` | Max delay before background flush. |
-| `ProbesPollInterval` | `60s` | Remote config and probe polling interval. |
-| `SampleRate` | `1.0` | Per-event sample rate. |
-| `LogLevel` | `warning` | Minimum captured log severity. |
-| `RequestTimeout` | `5s` | HTTP timeout for connected transport and remote config fetches. |
-| `RedactFields` | mandatory baseline plus `[]` additional fields | Additional field names to redact before buffering or transport; these cannot replace the mandatory baseline. |
-| `MaxProbeLabels` | `50` | Max distinct probe labels held in memory. |
-| `MaxProbeEntriesPerLabel` | `10` | Ring-buffer size per probe label. |
-| `ProbeFlushOnError` | `true` | Flush probe buffers with exceptions. |
-| `Transport` | internal default transport | Advanced override for tests or custom senders. |
-| `RemoteConfigFetcher` | default HTTP fetcher in connected mode | Advanced override for tests or custom config fetches. |
-
 ## Install Examples by Mode
 
 ### Connected `net/http`
@@ -152,7 +260,7 @@ import (
 
 func main() {
 	client := debugbundle.New(debugbundle.Config{
-		ProjectToken: os.Getenv("DEBUGBUNDLE_TOKEN"),
+		ProjectToken: os.Getenv("DEBUGBUNDLE_PROJECT_TOKEN"),
 		Service:      "checkout-api",
 		Environment:  "production",
 	})
@@ -248,44 +356,6 @@ Then import subpackages such as `debugbundlehttp`, `relay`, `debugbundleslog`, `
 
 For an existing v2 service, change each `github.com/debugbundle/debugbundle-go/v2` import to `github.com/debugbundle/debugbundle-go/v3` only when adopting the published v3 module. Review hook timing, asynchronous initial policy loading, and bounded overload behavior in the migration guide. Keep v2 pinned until the upgraded app passes its framework smoke.
 
-## Browser Relay
-
-Mount the browser relay on the same origin as your frontend:
-
-```go
-mux.Handle("/debugbundle/browser", debugbundlehttp.RelayHandler(client, relay.Options{}))
-```
-
-Relay options:
-
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `AllowedOrigins` | empty | When unset, the relay enforces same-origin requests only. Set explicit allowed origins for split frontend/backend hosts. |
-| `MaxBodyBytes` | `256 KB` | Maximum accepted request body size. |
-| `RateLimitPerMinute` | `60` | Per-IP rate limiting for relay requests. |
-| `DurableWrite` | `false` unless explicitly enabled in `relay.Options` | In connected mode, write the relay batch to the spool before forwarding. |
-| `TrustForwardedHeader` | `false` | Trust `X-Forwarded-For` for rate limiting and origin inference behind a trusted proxy only. |
-| `ProjectMode` | inherited from the SDK client | Overrides local-only vs connected relay delivery mode. |
-| `ProjectToken` | inherited from the SDK client | Server-side token used for connected forwarding. |
-| `Endpoint` | inherited from the SDK client | Connected forwarding destination. |
-| `LocalEventsDir` | inherited from the SDK client | Local-only relay write destination. |
-| `SpoolDir` | inherited from the SDK client | Connected durable spool destination. |
-| `Service` | empty | Optional override for browser event `service.name`. |
-| `Environment` | empty | Optional override for browser event `service.environment`. |
-| `Transport` | default HTTP or file sender | Advanced override for tests or custom forwarding. |
-
-Relay behavior:
-
-- same-origin is the safe default; use explicit allowed origins when the frontend and backend live on different hosts.
-- Requests must use `Content-Type: application/json`.
-- Browser payloads are schema-checked and only the supported browser event types are accepted.
-- Browser-supplied DebugBundle credentials are stripped before delivery, preserving credential isolation.
-- Local-only mode writes relay batches to `.debugbundle/local/events`.
-- Connected durable mode writes relay batches to `.debugbundle/local/browser-relay-spool`, then forwards them with the server-side project token.
-- Connected forwarding without durable writes sends directly to the configured endpoint.
-- To disable the relay entirely, do not mount the route.
-- A missing token or missing endpoint means connected relay forwarding cannot succeed; treat that as a configuration error and leave the route unmounted until the server-side config is fixed.
-
 ## Service Naming
 
 Use distinct service names when one project receives events from multiple deployables:
@@ -309,41 +379,6 @@ Normal status values:
 - `healthy` — idle or the last flush succeeded
 - `degraded` — the ingestion API returned `429` or `5xx`, so buffered events are being retained for retry
 - `disconnected` — the SDK was not initialized with a usable config, or repeated transport failures exhausted the connection path
-
-## First-Event Verification
-
-Use an explicit test exception or message during setup:
-
-```go
-client := debugbundle.New(debugbundle.Config{
-	ProjectToken: os.Getenv("DEBUGBUNDLE_TOKEN"),
-	Service:      "debugbundle-first-event",
-	Environment:  "staging",
-})
-
-client.CaptureException(context.Background(), errors.New("debugbundle first-event verification"))
-_ = client.Flush(context.Background())
-```
-
-Then confirm the event through your mock ingestion endpoint, a staging project, or the DebugBundle CLI verification flow. This repository also ships a clean-install smoke harness that proves both backend and relay delivery through the public module surface:
-
-```bash
-make smoke
-```
-
-To qualify an unpublished candidate as an installed module, use
-`make smoke-module-artifact`. It builds a deterministic module ZIP and installs it
-from a local file proxy into a fresh module cache without a source replacement.
-The smoke verifies the exact SDK version, native HTTP evidence and recovery,
-middleware and browser relay delivery. `.tmp/evidence-artifact-manifest.json`
-records the source and archive hashes; it does not establish publication.
-Use `SMOKE_GO_IMAGE=golang:1.21-bookworm` to repeat on the supported Go floor.
-
-For an already published tag, the release path can also rerun the same app-driven smoke against the published module install:
-
-```bash
-make smoke-published VERSION=3.0.1
-```
 
 ## Validation
 
@@ -371,12 +406,6 @@ Stable releases are cut with `vX.Y.Z` tags. The release workflow runs `make veri
 - Sensitive keys such as `authorization`, `cookie`, `password`, `token`, and related variants are redacted before events are stored or sent.
 - Request headers use an allowlist by default.
 - Add project-specific redaction keys with `Config.RedactFields` rather than capturing broad payloads.
-
-## Examples
-
-- net/http app: [examples/nethttp/main.go](examples/nethttp/main.go)
-- Gin app: [examples/gin/main.go](examples/gin/main.go)
-- Echo app: [examples/echo/main.go](examples/echo/main.go)
 
 ## Documentation
 
