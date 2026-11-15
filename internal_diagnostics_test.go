@@ -24,7 +24,7 @@ func TestInternalDiagnosticPanicIsContained(t *testing.T) {
 	if os.Getenv("DEBUGBUNDLE_DIAGNOSTIC_AUDIT_CHILD") == "1" {
 		client := New(Config{ProjectToken: "dbundle_proj_test", Transport: &recordingTransport{},
 			RemoteConfigFetcher: auditDiagnosticFetcher{failure: auditDiagnosticError{}}})
-		defer client.Close()
+		defer func() { _ = client.Close() }()
 		select {
 		case <-client.remoteConfigReady:
 		case <-time.After(time.Second):
@@ -44,7 +44,7 @@ func TestInternalDiagnosticPanicIsContained(t *testing.T) {
 func TestInternalDiagnosticDataIsBounded(t *testing.T) {
 	client := New(Config{ProjectToken: "dbundle_proj_test", Transport: &recordingTransport{},
 		RemoteConfigFetcher: auditDiagnosticFetcher{failure: errors.New("token=audit-private-value " + strings.Repeat("x", 1<<20))}})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	select {
 	case <-client.remoteConfigReady:
 	case <-time.After(time.Second):
