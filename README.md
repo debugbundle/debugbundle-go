@@ -64,6 +64,8 @@ Relay options:
 | `SpoolDir` | inherited from the SDK client | Connected durable spool destination. |
 | `Service` | empty | Optional override for browser event `service.name`. |
 | `Environment` | empty | Optional override for browser event `service.environment`. |
+| `RedactFields` | inherited from the SDK client | Additional segment-matched field names to redact on relayed events without displacing validated closed protocol fields. |
+| `RedactExactFields` | inherited from the SDK client | Additional ASCII case-insensitive exact whole-key field names to redact on relayed events (`tag` matches `tag`/`TAG`, not `tag_name`). |
 | `Transport` | default HTTP or file sender | Advanced override for tests or custom forwarding. |
 
 Relay behavior:
@@ -154,7 +156,8 @@ Capture-policy fields are server-owned and are not accepted in local SDK config.
 | `SampleRate` | `1.0` | Per-event sample rate. |
 | `LogLevel` | `warning` | Minimum captured log severity. |
 | `RequestTimeout` | `5s` | HTTP timeout for connected transport and remote config fetches. |
-| `RedactFields` | mandatory baseline plus `[]` additional fields | Additional field names to redact before buffering or transport; these cannot replace the mandatory baseline. |
+| `RedactFields` | mandatory baseline plus `[]` additional fields | Additional segment-matched field names to redact before buffering or transport (additive to the mandatory baseline; validated closed SDK protocol structures remain intact). Also configurable via `Config.WithRedactFields(...)`. |
+| `RedactExactFields` | `[]` | Additional ASCII case-insensitive whole-key redaction fields where punctuation is significant (`tag` matches `tag`/`TAG`, not `tag_name`, `tagName`, or `tag-name`). Shares the 128-key combined custom limit with `RedactFields`. Also configurable via `Config.WithRedactExactFields(...)`. |
 | `MaxProbeLabels` | `50` | Max distinct probe labels held in memory. |
 | `MaxProbeEntriesPerLabel` | `10` | Ring-buffer size per probe label. |
 | `ProbeFlushOnError` | `true` | Flush probe buffers with exceptions. |
@@ -405,7 +408,7 @@ Stable releases are cut with `vX.Y.Z` tags. The release workflow runs `make veri
 - Request and response bodies are off by default.
 - Sensitive keys such as `authorization`, `cookie`, `password`, `token`, and related variants are redacted before events are stored or sent.
 - Request headers use an allowlist by default.
-- Add project-specific redaction keys with `Config.RedactFields` rather than capturing broad payloads.
+- Add project-specific redaction keys with `Config.RedactFields` (segment-matched) or `Config.RedactExactFields` / `Config.WithRedactExactFields(...)` (exact whole-key) rather than capturing broad payloads.
 
 ## Documentation
 

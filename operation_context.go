@@ -94,7 +94,7 @@ func (client *Client) BeginOperation(ctx context.Context, options OperationOptio
 	}
 	var name, limit any
 	if options.Name != "" && len(options.Name) <= 4096 {
-		if protected, err := redaction.ProtectTelemetry(options.Name, client.config.redactFields); err == nil {
+		if protected, err := redaction.ProtectTelemetryWithOptions(options.Name, client.telemetryOptions()); err == nil {
 			if value, ok := protected.(string); ok {
 				name = clipEvidence(value, 128)
 			}

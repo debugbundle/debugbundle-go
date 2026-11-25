@@ -133,7 +133,7 @@ func (client *Client) SetContext(key string, value any) {
 		client.mu.Unlock()
 		return
 	}
-	protected, err := redaction.ProtectTelemetry(map[string]any{key: value}, client.config.redactFields)
+	protected, err := redaction.ProtectTelemetryWithOptions(map[string]any{key: value}, client.telemetryOptions())
 	if err != nil {
 		return
 	}

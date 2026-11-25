@@ -265,3 +265,146 @@ func TestRelayProofLossFiltersAlreadyPreparedNativeTails(t *testing.T) {
 		t.Fatal("tail continuation missing")
 	}
 }
+
+func TestRelayBroadRedactFieldsPreservesClosedBrowserProtocolStructures(t *testing.T) {
+	directory := t.TempDir()
+	client := debugbundle.New(debugbundle.Config{
+		ProjectToken:   "dbundle_proj_test",
+		ProjectMode:    debugbundle.ProjectModeLocalOnly,
+		LocalEventsDir: directory,
+	}.WithRedactFields("tag", "reference", "reason", "file"))
+	defer func() { _ = client.Close() }()
+
+	handler := NewHandler(client, Options{EvidenceCapabilities: fullProof()})
+	event := evidenceFixture(t)
+	payload := event["payload"].(map[string]any)
+	payload["browser_event"] = map[string]any{
+		"kind":          "resource_error",
+		"message":       "script load failed tag=SYNTHETIC_BE_MSG",
+		"file_name":     "https://cdn.example.test/app.js?file=SYNTHETIC_BE_FILE&ok=1",
+		"line_number":   10,
+		"column_number": 2,
+		"opaque":        false,
+		"target": map[string]any{
+			"tag_name":   "script",
+			"source_url": "https://cdn.example.test/app.js?tag=SYNTHETIC_SRC&ok=1",
+		},
+	}
+	payload["rejection_reason"] = map[string]any{
+		"kind":    "error",
+		"message": "rejected reason=SYNTHETIC_REJ",
+	}
+	payload["resource_observations"] = map[string]any{
+		"version": 1,
+		"items": []any{
+			map[string]any{
+				"kind": "timing", "observed_at": "2026-05-23T12:00:00Z", "source_url": "https://cdn.example.test/app.js",
+				"availability": "observed", "response_status": 500, "duration_ms": 14, "transfer_size_bytes": 0,
+			},
+		},
+	}
+	event["context"] = map[string]any{
+		"evidence_reference": map[string]any{
+			"version":     1,
+			"failure_ref": "11111111-1111-4111-8111-111111111111",
+			"scope":       map[string]any{"kind": "page", "page_id": "22222222-2222-4222-8222-222222222222"},
+		},
+		"evidence_limits": map[string]any{"version": 1, "execution": "unsupported"},
+		"payout": map[string]any{
+			"tag":       "SYNTHETIC_TAG",
+			"reference": "SYNTHETIC_REF",
+			"reason":    "SYNTHETIC_REASON",
+			"file":      "SYNTHETIC_FILE",
+		},
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, evidenceRequest(t, []map[string]any{event}, true))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted relay response, got %d body=%s", response.Code, response.Body.String())
+	}
+	files, _ := filepath.Glob(filepath.Join(directory, "*.events.json"))
+	if len(files) != 1 {
+		t.Fatalf("expected one local relay file, got %d", len(files))
+	}
+	data, _ := os.ReadFile(files[0])
+	var written []map[string]any
+	_ = json.Unmarshal(data, &written)
+	if len(written) != 1 || !evidence.Validate(written[0]) {
+		t.Fatalf("expected canonical preserved relayed event, got %s", data)
+	}
+	outPayload := written[0]["payload"].(map[string]any)
+	outBrowserEvent := outPayload["browser_event"].(map[string]any)
+	if outBrowserEvent["target"].(map[string]any)["tag_name"] != "script" {
+		t.Fatalf("expected allowlisted browser_event.target.tag_name preserved, got %#v", outBrowserEvent["target"])
+	}
+	if outBrowserEvent["message"] != "script load failed tag=[REDACTED]" {
+		t.Fatalf("expected nested browser_event message scrubbed, got %#v", outBrowserEvent["message"])
+	}
+	if outPayload["rejection_reason"].(map[string]any)["kind"] != "error" ||
+		outPayload["rejection_reason"].(map[string]any)["message"] != "rejected reason=[REDACTED]" {
+		t.Fatalf("expected rejection_reason preserved and scrubbed, got %#v", outPayload["rejection_reason"])
+	}
+	if outPayload["exception_evidence"] == nil || outPayload["resource_observations"] == nil {
+		t.Fatalf("expected typed evidence preserved, got %#v", outPayload)
+	}
+	outContext := written[0]["context"].(map[string]any)
+	if outContext["evidence_reference"].(map[string]any)["failure_ref"] != "11111111-1111-4111-8111-111111111111" ||
+		outContext["evidence_limits"].(map[string]any)["execution"] != "unsupported" {
+		t.Fatalf("expected protocol context preserved, got %#v", outContext)
+	}
+	payout := outContext["payout"].(map[string]any)
+	for _, field := range []string{"tag", "reference", "reason", "file"} {
+		if payout[field] != "[REDACTED]" {
+			t.Fatalf("expected payout.%s redacted, got %#v", field, payout[field])
+		}
+	}
+	if strings.Contains(string(data), "SYNTHETIC_") {
+		t.Fatalf("secret leaked into relayed event: %s", data)
+	}
+}
+
+func TestRelayRedactExactFieldsMasksExactKeysWhilePreservingSiblings(t *testing.T) {
+	directory := t.TempDir()
+	handler := NewHandler(nil, Options{
+		ProjectMode:    debugbundle.ProjectModeLocalOnly,
+		LocalEventsDir: directory,
+	}.WithRedactFields("custom_broad").WithRedactExactFields("tag"))
+
+	event := map[string]any{
+		"schema_version": "2026-03-01",
+		"event_id":       "00000000-0000-4000-8000-000000000777",
+		"event_type":     "frontend_exception",
+		"occurred_at":    "2026-05-23T12:00:00Z",
+		"sdk_name":       browserSDKName,
+		"sdk_version":    "1.2.3",
+		"service":        map[string]any{"name": "checkout-web", "environment": "production"},
+		"payload": map[string]any{
+			"message": "failed tag=SYNTHETIC_MSG tag_name=script",
+			"url":     "https://example.test/pay?tag=SYNTHETIC_URL&tag_name=script",
+		},
+		"context": map[string]any{
+			"tag":               "SYNTHETIC_EXACT",
+			"tag_name":          "script",
+			"user_custom_broad": "SYNTHETIC_BROAD",
+		},
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, evidenceRequest(t, []map[string]any{event}, false))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted relay response, got %d body=%s", response.Code, response.Body.String())
+	}
+	files, _ := filepath.Glob(filepath.Join(directory, "*.events.json"))
+	data, _ := os.ReadFile(files[0])
+	var written []map[string]any
+	_ = json.Unmarshal(data, &written)
+
+	outPayload := written[0]["payload"].(map[string]any)
+	outContext := written[0]["context"].(map[string]any)
+	if outPayload["message"] != "failed tag=[REDACTED] tag_name=script" ||
+		outPayload["url"] != "https://example.test/pay?tag=%5BREDACTED%5D&tag_name=script" {
+		t.Fatalf("unexpected relay payload exact redaction: %#v", outPayload)
+	}
+	if outContext["tag"] != "[REDACTED]" || outContext["tag_name"] != "script" || outContext["user_custom_broad"] != "[REDACTED]" {
+		t.Fatalf("unexpected relay context redaction: %#v", outContext)
+	}
+}

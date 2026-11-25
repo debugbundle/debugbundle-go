@@ -33,12 +33,22 @@ func TestPortablePrivacyConformance(t *testing.T) {
 			Input    any    `json:"input"`
 			Expected any    `json:"expected"`
 		} `json:"cases"`
+		ExactKeyCases []struct {
+			ID             string   `json:"id"`
+			AdditionalKeys []string `json:"additional_keys"`
+			ExactKeys      []string `json:"exact_keys"`
+			Input          any      `json:"input"`
+			Expected       any      `json:"expected"`
+		} `json:"exact_key_cases"`
 	}
 	if err := json.Unmarshal(body, &corpus); err != nil {
 		t.Fatal(err)
 	}
 	if corpus.Policy != "telemetry-privacy-v1" {
 		t.Fatal("privacy policy version drift")
+	}
+	if len(corpus.ExactKeyCases) == 0 {
+		t.Fatal("missing exact_key_cases in privacy conformance fixture")
 	}
 	for _, fixture := range corpus.Cases {
 		t.Run(fixture.ID, func(t *testing.T) {
@@ -55,6 +65,28 @@ func TestPortablePrivacyConformance(t *testing.T) {
 			secondBytes, _ := json.Marshal(second)
 			if err != nil || string(secondBytes) != string(actual) {
 				t.Fatal("privacy pass is not idempotent")
+			}
+		})
+	}
+	for _, fixture := range corpus.ExactKeyCases {
+		t.Run(fixture.ID, func(t *testing.T) {
+			options := TelemetryOptions{
+				AdditionalFields: fixture.AdditionalKeys,
+				ExactFields:      fixture.ExactKeys,
+			}
+			result, err := ProtectTelemetryWithOptions(fixture.Input, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual, _ := json.Marshal(result)
+			expected, _ := json.Marshal(fixture.Expected)
+			if string(actual) != string(expected) {
+				t.Fatalf("unexpected exact-key sanitation: %s, want %s", actual, expected)
+			}
+			second, err := ProtectTelemetryWithOptions(result, options)
+			secondBytes, _ := json.Marshal(second)
+			if err != nil || string(secondBytes) != string(actual) {
+				t.Fatal("exact-key privacy pass is not idempotent")
 			}
 		})
 	}
@@ -206,5 +238,50 @@ func TestBoundedInputRetainsPlainTypedValuesAndRejectsUnscannableGraphs(t *testi
 	}
 	if SafeEventIdentity(map[string]any{"sdk_name": "safe"}, []string{""}) {
 		t.Fatal("invalid options accepted")
+	}
+}
+
+func TestExactFieldsBoundsBoundariesAndIdentityChecks(t *testing.T) {
+	halfBroad := make([]string, 64)
+	halfExact := make([]string, 64)
+	for index := 0; index < 64; index++ {
+		halfBroad[index] = "broad_" + string(rune('a'+(index%26))) + strings.Repeat("x", index/26)
+		halfExact[index] = "exact_" + string(rune('a'+(index%26))) + strings.Repeat("y", index/26)
+	}
+	if _, err := ProtectTelemetryWithOptions(map[string]any{"safe": 1}, TelemetryOptions{
+		AdditionalFields: halfBroad,
+		ExactFields:      halfExact,
+	}); err != nil {
+		t.Fatalf("128 combined custom keys should be accepted: %v", err)
+	}
+	if _, err := ProtectTelemetryWithOptions(map[string]any{"safe": 1}, TelemetryOptions{
+		AdditionalFields: halfBroad,
+		ExactFields:      append(append([]string{}, halfExact...), "overflow"),
+	}); !errors.Is(err, ErrUnsafeTelemetry) {
+		t.Fatalf("129 combined custom keys must fail closed: %v", err)
+	}
+	for _, invalidExact := range [][]string{{""}, {"   "}, {strings.Repeat("k", 65)}, {"bad\xffkey"}} {
+		if _, err := ProtectTelemetryWithOptions(map[string]any{"safe": 1}, TelemetryOptions{ExactFields: invalidExact}); !errors.Is(err, ErrUnsafeTelemetry) {
+			t.Fatalf("invalid exact key %q must fail closed: %v", invalidExact, err)
+		}
+	}
+
+	// Verify overlapping boundary scan and literal metacharacter quoting.
+	result, err := ProtectTelemetryWithOptions(map[string]any{
+		"message": "my-tag=tag=SYNTHETIC_SECRET my-tag=keep tag=FIRST tag=SECOND account.tag=SECRET accountXtag=keep",
+	}, TelemetryOptions{ExactFields: []string{"tag", "account.tag"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "my-tag=tag=[REDACTED] my-tag=keep tag=[REDACTED] tag=[REDACTED] account.tag=[REDACTED] accountXtag=keep"
+	if got := result.(map[string]any)["message"]; got != want {
+		t.Fatalf("exact text boundary mismatch:\n got: %v\nwant: %v", got, want)
+	}
+
+	if !SafeEventIdentityWithOptions(map[string]any{"correlation": map[string]any{"trace_id": "tag_name=script"}}, TelemetryOptions{ExactFields: []string{"tag"}}) {
+		t.Fatal("exact key should not reject compound sibling in identity")
+	}
+	if SafeEventIdentityWithOptions(map[string]any{"correlation": map[string]any{"trace_id": "tag=SYNTHETIC_SECRET"}}, TelemetryOptions{ExactFields: []string{"tag"}}) {
+		t.Fatal("exact key assignment in identity must be rejected")
 	}
 }

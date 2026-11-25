@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/debugbundle/debugbundle-go/v3/internal/evidence"
-	"github.com/debugbundle/debugbundle-go/v3/redaction"
 	"github.com/debugbundle/debugbundle-go/v3/transport"
 )
 
@@ -53,6 +52,7 @@ type Config struct {
 	LogLevel                    LogLevel
 	RequestTimeout              time.Duration
 	RedactFields                []string
+	RedactExactFields           []string
 	MaxProbeLabels              int
 	MaxProbeEntriesPerLabel     int
 	ProbeFlushOnError           *bool
@@ -80,12 +80,25 @@ type resolvedConfig struct {
 	logLevel                    LogLevel
 	requestTimeout              time.Duration
 	redactFields                []string
+	redactExactFields           []string
 	maxProbeLabels              int
 	maxProbeEntriesPerLabel     int
 	probeFlushOnError           bool
 	transport                   transport.Sender
 	remoteConfigFetcher         RemoteConfigFetcher
 	beforeSend                  BeforeSendFunc
+}
+
+// WithRedactFields returns a copy of Config with additional segment-matched redaction fields.
+func (config Config) WithRedactFields(fields ...string) Config {
+	config.RedactFields = append(append([]string{}, config.RedactFields...), fields...)
+	return config
+}
+
+// WithRedactExactFields returns a copy of Config with additional exact whole-key redaction fields.
+func (config Config) WithRedactExactFields(fields ...string) Config {
+	config.RedactExactFields = append(append([]string{}, config.RedactExactFields...), fields...)
+	return config
 }
 
 func (config Config) resolve() resolvedConfig {
@@ -108,6 +121,7 @@ func (config Config) resolve() resolvedConfig {
 		logLevel:                    normalizeLogLevel(config.LogLevel),
 		requestTimeout:              config.RequestTimeout,
 		redactFields:                append([]string{}, config.RedactFields...),
+		redactExactFields:           append([]string{}, config.RedactExactFields...),
 		maxProbeLabels:              config.MaxProbeLabels,
 		maxProbeEntriesPerLabel:     config.MaxProbeEntriesPerLabel,
 		probeFlushOnError:           true,
@@ -163,9 +177,6 @@ func (config Config) resolve() resolvedConfig {
 	}
 	if resolved.maxProbeEntriesPerLabel <= 0 {
 		resolved.maxProbeEntriesPerLabel = 10
-	}
-	if len(resolved.redactFields) == 0 {
-		resolved.redactFields = append([]string{}, redaction.DefaultSensitiveFields...)
 	}
 	if config.ProbeFlushOnError != nil {
 		resolved.probeFlushOnError = *config.ProbeFlushOnError

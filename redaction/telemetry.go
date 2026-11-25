@@ -30,17 +30,31 @@ var telemetryEscapedLabel = regexp.MustCompile(`(?i)(?:password|token|secret|aut
 var telemetryCamel = regexp.MustCompile(`([a-z0-9])([A-Z])`)
 var telemetrySeparators = regexp.MustCompile(`[^a-z0-9]+`)
 
+// TelemetryOptions configures additive broad and exact custom redaction fields.
+type TelemetryOptions struct {
+	AdditionalFields []string
+	ExactFields      []string
+}
+
 type telemetryWork struct {
-	nodes      int
-	textBytes  int
-	fields     map[string]struct{}
-	extra      []*regexp.Regexp
-	assignment *regexp.Regexp
+	nodes         int
+	textBytes     int
+	fields        map[string]struct{}
+	exact         map[string]struct{}
+	extra         []*regexp.Regexp
+	exactPatterns []*regexp.Regexp
+	assignment    *regexp.Regexp
 }
 
 // ProtectTelemetry enforces mandatory credential rules in addition to caller fields.
 // It returns JSON-safe data and never returns the original input on budget or parse failure.
 func ProtectTelemetry(value any, additionalFields []string) (protected any, failure error) {
+	return ProtectTelemetryWithOptions(value, TelemetryOptions{AdditionalFields: additionalFields})
+}
+
+// ProtectTelemetryWithOptions enforces mandatory credential rules in addition to
+// caller broad (segment-matched) and exact (whole-key) fields.
+func ProtectTelemetryWithOptions(value any, options TelemetryOptions) (protected any, failure error) {
 	// Application-defined MarshalJSON methods can panic. Never let them crash the host.
 	defer func() {
 		if recover() != nil {
@@ -48,21 +62,25 @@ func ProtectTelemetry(value any, additionalFields []string) (protected any, fail
 			failure = ErrUnsafeTelemetry
 		}
 	}()
-	if len(additionalFields) > 128 {
+	if len(options.AdditionalFields)+len(options.ExactFields) > 128 {
 		return nil, ErrUnsafeTelemetry
 	}
 	fields := map[string]struct{}{}
-	extra := make([]*regexp.Regexp, 0, len(additionalFields))
+	exact := map[string]struct{}{}
+	extra := make([]*regexp.Regexp, 0, len(options.AdditionalFields))
+	exactPatterns := make([]*regexp.Regexp, 0, len(options.ExactFields))
 	labels := append([]string{}, DefaultSensitiveFields...)
 	labels = append(labels, "client_secret", "x_api_key", "accessToken", "refreshToken", "privateKey", "clientSecret")
 	for _, field := range DefaultSensitiveFields {
 		fields[canonicalKey(field)] = struct{}{}
 	}
-	for _, field := range additionalFields {
-		if len(field) == 0 || len(field) > 64 || strings.TrimSpace(field) == "" {
+	for _, field := range options.AdditionalFields {
+		if len(field) == 0 || len(field) > 64 || !utf8.ValidString(field) || strings.TrimSpace(field) == "" {
 			return nil, ErrUnsafeTelemetry
 		}
-		fields[canonicalKey(field)] = struct{}{}
+		if canonical := canonicalKey(field); canonical != "" {
+			fields[canonical] = struct{}{}
+		}
 		// Compile each bounded caller rule once per operation, never per scalar.
 		// Keeping this local prevents cross-client policy sharing or an unbounded cache.
 		pattern, err := regexp.Compile(`(?i)\b(` + regexp.QuoteMeta(field) + `)\b(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;]+)`)
@@ -71,8 +89,26 @@ func ProtectTelemetry(value any, additionalFields []string) (protected any, fail
 		}
 		extra = append(extra, pattern)
 	}
+	for _, field := range options.ExactFields {
+		if len(field) == 0 || len(field) > 64 || !utf8.ValidString(field) || strings.TrimSpace(field) == "" {
+			return nil, ErrUnsafeTelemetry
+		}
+		trimmed := strings.TrimSpace(field)
+		exact[asciiLower(trimmed)] = struct{}{}
+		pattern, err := regexp.Compile(`(?i)(` + regexp.QuoteMeta(trimmed) + `)(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;]+)`)
+		if err != nil {
+			return nil, ErrUnsafeTelemetry
+		}
+		exactPatterns = append(exactPatterns, pattern)
+	}
 	assignment := regexp.MustCompile(`(?i)\b(` + strings.Join(labels, "|") + `)\b(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s&,;]+)`)
-	work := telemetryWork{fields: fields, extra: extra, assignment: assignment}
+	work := telemetryWork{
+		fields:        fields,
+		exact:         exact,
+		extra:         extra,
+		exactPatterns: exactPatterns,
+		assignment:    assignment,
+	}
 	if err := checkTelemetryInput(value); err != nil {
 		return nil, err
 	}
@@ -105,6 +141,14 @@ func canonicalKey(value string) string {
 		}
 	}
 	return result.String()
+}
+
+func (work *telemetryWork) exactSensitiveKey(key string) bool {
+	if len(work.exact) == 0 {
+		return false
+	}
+	_, found := work.exact[asciiLower(strings.TrimSpace(key))]
+	return found
 }
 
 func (work *telemetryWork) sensitiveKey(key string) bool {
@@ -175,7 +219,7 @@ func (work *telemetryWork) visit(value any, depth int, structured bool) (any, er
 			if work.scrubText(key) != key {
 				continue
 			}
-			if work.sensitiveKey(key) {
+			if work.sensitiveKey(key) || work.exactSensitiveKey(key) {
 				output[key] = redactedMarker
 				continue
 			}
@@ -285,6 +329,9 @@ func (work *telemetryWork) scrubTextValue(input string, scanURLs bool) string {
 	for _, pattern := range work.extra {
 		output = pattern.ReplaceAllString(output, `${1}${2}[REDACTED]`)
 	}
+	for _, pattern := range work.exactPatterns {
+		output = scrubExactAssignment(output, pattern)
+	}
 	cardRanges := telemetryCard.FindAllStringIndex(output, -1)
 	for index := len(cardRanges) - 1; index >= 0; index-- {
 		start, end := cardRanges[index][0], cardRanges[index][1]
@@ -302,6 +349,39 @@ func (work *telemetryWork) scrubTextValue(input string, scanURLs bool) string {
 		trimmed := strings.TrimRight(candidate, ").,;")
 		return work.scrubURL(trimmed) + candidate[len(trimmed):]
 	})
+}
+
+func scrubExactAssignment(input string, pattern *regexp.Regexp) string {
+	var builder strings.Builder
+	offset := 0
+	lastWritten := 0
+	changed := false
+	for offset < len(input) {
+		match := pattern.FindStringSubmatchIndex(input[offset:])
+		if match == nil {
+			break
+		}
+		absKeyStart := offset + match[2]
+		absKeyEnd := offset + match[3]
+		absSepEnd := offset + match[5]
+		absMatchEnd := offset + match[1]
+		// Go RE2 has no lookaround; enforce non-identifier [A-Za-z0-9_-] boundaries manually.
+		if (absKeyStart > 0 && identifierByte(input[absKeyStart-1])) ||
+			(absKeyEnd < len(input) && identifierByte(input[absKeyEnd])) {
+			offset = absKeyStart + 1
+			continue
+		}
+		builder.WriteString(input[lastWritten:absSepEnd])
+		builder.WriteString(redactedMarker)
+		lastWritten = absMatchEnd
+		offset = absMatchEnd
+		changed = true
+	}
+	if !changed {
+		return input
+	}
+	builder.WriteString(input[lastWritten:])
+	return builder.String()
 }
 
 func identifierByte(value byte) bool {
@@ -337,7 +417,7 @@ func (work *telemetryWork) scrubURL(raw string) string {
 			if len(key) > 128 || work.scrubTextValue(key, false) != key {
 				continue
 			}
-			if work.sensitiveKey(key) || work.scrubTextValue(value, false) != value {
+			if work.sensitiveKey(key) || work.exactSensitiveKey(key) || work.scrubTextValue(value, false) != value {
 				value = redactedMarker
 			}
 			query = append(query, url.QueryEscape(key)+"="+url.QueryEscape(value))
@@ -350,6 +430,11 @@ func (work *telemetryWork) scrubURL(raw string) string {
 
 // SafeEventIdentity scans scalar identities without masking protocol field names.
 func SafeEventIdentity(event map[string]any, extra []string) bool {
+	return SafeEventIdentityWithOptions(event, TelemetryOptions{AdditionalFields: extra})
+}
+
+// SafeEventIdentityWithOptions scans scalar identities using broad and exact custom rules.
+func SafeEventIdentityWithOptions(event map[string]any, options TelemetryOptions) bool {
 	values := []any{event["schema_version"], event["sdk_name"], event["sdk_version"]}
 	if correlation := event["correlation"]; correlation != nil {
 		fields, ok := correlation.(map[string]any)
@@ -368,7 +453,7 @@ func SafeEventIdentity(event map[string]any, extra []string) bool {
 		if !ok {
 			return false
 		}
-		cleaned, err := ProtectTelemetry(scalar, extra)
+		cleaned, err := ProtectTelemetryWithOptions(scalar, options)
 		if err != nil || cleaned != scalar {
 			return false
 		}

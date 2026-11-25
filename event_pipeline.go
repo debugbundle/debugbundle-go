@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/debugbundle/debugbundle-go/v3/internal/evidence"
 )
 
 func (client *Client) finalizeQueuedEvent(candidate queuedEvent) (queuedEvent, bool) {
@@ -77,8 +79,8 @@ func (client *Client) captureWithMode(ctx context.Context, eventType string, pay
 	if fatal {
 		fitFatalEvidence(payload, mergedContext)
 	}
-	redactedContext := toObjectMap(client.redactor.Redact(mergedContext))
-	redactedPayload := toObjectMap(client.redactor.Redact(payload))
+	redactedContext := client.redactContextPreservingProtocol(mergedContext)
+	redactedPayload := client.redactPayloadPreservingProtocol(eventType, payload)
 	traceID := firstNonEmpty(TraceIDFromContext(ctx), stringValue(redactedContext["trace_id"]), stringValue(redactedPayload["trace_id"]))
 	correlation := client.correlationPayload(ctx, redactedContext, redactedPayload, traceID)
 	event := client.newEventEnvelope(eventType, time.Now().UTC(), redactedPayload)
@@ -157,4 +159,44 @@ func (client *Client) passesCapturePolicyLocked(event EventEnvelope) bool {
 	default:
 		return true
 	}
+}
+
+func (client *Client) redactContextPreservingProtocol(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return map[string]any{}
+	}
+	preserved := map[string]any{}
+	regular := make(map[string]any, len(source))
+	for key, value := range source {
+		if evidence.IsValidProtocolContextField(key, value) {
+			preserved[key] = value
+			continue
+		}
+		regular[key] = value
+	}
+	redacted := toObjectMap(client.redactor.Redact(regular))
+	for key, value := range preserved {
+		redacted[key] = value
+	}
+	return redacted
+}
+
+func (client *Client) redactPayloadPreservingProtocol(eventType string, source map[string]any) map[string]any {
+	if eventType == "diagnostic_context" && evidence.IsValidDiagnosticPayload(source) {
+		return source
+	}
+	preserved := map[string]any{}
+	regular := make(map[string]any, len(source))
+	for key, value := range source {
+		if evidence.IsValidProtocolPayloadField(eventType, key, value) {
+			preserved[key] = value
+			continue
+		}
+		regular[key] = value
+	}
+	redacted := toObjectMap(client.redactor.Redact(regular))
+	for key, value := range preserved {
+		redacted[key] = value
+	}
+	return redacted
 }

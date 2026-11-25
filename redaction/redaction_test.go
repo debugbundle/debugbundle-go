@@ -63,3 +63,38 @@ func TestRepeatedNativeCollectionsAreNotMisreportedAsCycles(t *testing.T) {
 		t.Fatal("actual cycle no longer bounded")
 	}
 }
+
+func TestRedactExactFieldsPreservesCompoundSiblings(t *testing.T) {
+	redactor := NewWithExactFields(nil, []string{"tag", "X-Tag"})
+	result := redactor.Redact(map[string]any{
+		"tag":           "SYNTHETIC_SECRET",
+		"TAG":           "SYNTHETIC_UPPER",
+		"x-tag":         "SYNTHETIC_HYPHEN",
+		"X-TAG":         "SYNTHETIC_HYPHEN_UPPER",
+		"tag_name":      "script",
+		"tagName":       "link",
+		"tag-name":      "img",
+		"x_tag":         "keep-underscore",
+		"my-x-tag":      "keep-prefix",
+		"x-tag-name":    "keep-suffix",
+		"user_password": "SYNTHETIC_PASSWORD",
+	}).(map[string]any)
+
+	for _, redactedKey := range []string{"tag", "TAG", "x-tag", "X-TAG", "user_password"} {
+		if result[redactedKey] != redactedMarker {
+			t.Fatalf("expected %q to be redacted, got %#v", redactedKey, result[redactedKey])
+		}
+	}
+	for key, expected := range map[string]string{
+		"tag_name":   "script",
+		"tagName":    "link",
+		"tag-name":   "img",
+		"x_tag":      "keep-underscore",
+		"my-x-tag":   "keep-prefix",
+		"x-tag-name": "keep-suffix",
+	} {
+		if result[key] != expected {
+			t.Fatalf("expected %q=%q, got %#v", key, expected, result[key])
+		}
+	}
+}

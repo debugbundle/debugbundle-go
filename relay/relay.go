@@ -52,7 +52,21 @@ type Options struct {
 	SpoolDir             string
 	Service              string
 	Environment          string
+	RedactFields         []string
+	RedactExactFields    []string
 	Transport            transport.Sender
+}
+
+// WithRedactFields returns a copy of Options with additional segment-matched redaction fields.
+func (options Options) WithRedactFields(fields ...string) Options {
+	options.RedactFields = append(append([]string{}, options.RedactFields...), fields...)
+	return options
+}
+
+// WithRedactExactFields returns a copy of Options with additional exact whole-key redaction fields.
+func (options Options) WithRedactExactFields(fields ...string) Options {
+	options.RedactExactFields = append(append([]string{}, options.RedactExactFields...), fields...)
+	return options
 }
 
 type responseBody struct {
@@ -146,6 +160,12 @@ func resolveOptions(config debugbundle.RuntimeConfig, options Options) Options {
 	}
 	if resolved.SpoolDir == "" {
 		resolved.SpoolDir = config.SpoolDir
+	}
+	if len(resolved.RedactFields) == 0 && len(config.RedactFields) > 0 {
+		resolved.RedactFields = append([]string{}, config.RedactFields...)
+	}
+	if len(resolved.RedactExactFields) == 0 && len(config.RedactExactFields) > 0 {
+		resolved.RedactExactFields = append([]string{}, config.RedactExactFields...)
 	}
 	return resolved
 }
@@ -345,7 +365,11 @@ func setCORSHeaders(writer http.ResponseWriter, origin string) {
 }
 
 func sanitizeEvent(candidate map[string]any, options Options) (map[string]any, error) {
-	if !redaction.SafeEventIdentity(candidate, nil) {
+	telemetryOpts := redaction.TelemetryOptions{
+		AdditionalFields: options.RedactFields,
+		ExactFields:      options.RedactExactFields,
+	}
+	if !redaction.SafeEventIdentityWithOptions(candidate, telemetryOpts) {
 		return nil, errInvalidBrowserRelayPayload
 	}
 	schemaVersion, ok := nonEmptyString(candidate["schema_version"])
@@ -389,27 +413,33 @@ func sanitizeEvent(candidate map[string]any, options Options) (map[string]any, e
 		"service":        service,
 		"payload":        payload,
 	}
-	stripSensitiveHeaders(payload)
-	protected, err := redaction.ProtectTelemetry(map[string]any{"payload": payload, "service": service, "context": candidate["context"]}, nil)
-	if err != nil {
-		return nil, errInvalidBrowserRelayPayload
+	payloadCopy := make(map[string]any, len(payload))
+	for key, value := range payload {
+		payloadCopy[key] = value
 	}
-	protectedFields, ok := protected.(map[string]any)
-	if !ok {
-		return nil, errInvalidBrowserRelayPayload
+	stripSensitiveHeaders(payloadCopy)
+	var contextMap map[string]any
+	if rawContext, exists := candidate["context"]; exists && rawContext != nil {
+		cast, ok := rawContext.(map[string]any)
+		if !ok {
+			return nil, errInvalidBrowserRelayPayload
+		}
+		contextMap = cast
 	}
-	protectedPayload, ok := protectedFields["payload"].(map[string]any)
-	if !ok {
-		return nil, errInvalidBrowserRelayPayload
-	}
-	protectedService, ok := protectedFields["service"].(map[string]any)
+	protectedPayload, protectedService, protectedContext, ok := evidence.ProtectEventFields(
+		eventType,
+		payloadCopy,
+		service,
+		contextMap,
+		telemetryOpts,
+	)
 	if !ok {
 		return nil, errInvalidBrowserRelayPayload
 	}
 	sanitized["payload"] = protectedPayload
 	sanitized["service"] = protectedService
-	if context, ok := protectedFields["context"].(map[string]any); ok && len(context) > 0 {
-		sanitized["context"] = context
+	if len(protectedContext) > 0 {
+		sanitized["context"] = protectedContext
 	}
 	if correlation, ok := candidate["correlation"].(map[string]any); ok {
 		keptCorrelation := keepCorrelationFields(correlation, eventType)

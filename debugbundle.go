@@ -100,7 +100,7 @@ func New(config Config) *Client {
 		operations:        &operationRegistry{},
 		evidence:          evidence.NewState(resolved.evidenceCapabilities),
 		config:            resolved,
-		redactor:          redaction.New(resolved.redactFields),
+		redactor:          redaction.NewWithExactFields(resolved.redactFields, resolved.redactExactFields),
 		buffer:            make([]queuedEvent, 0, min(resolved.batchSize, maxPendingEvents)),
 		persistent:        map[string]any{},
 		probes:            map[string][]probeEntry{},
@@ -197,16 +197,24 @@ func (client *Client) ProbeLazy(ctx context.Context, label string, data func() a
 	client.recordProbe(ctx, label, value, options...)
 }
 
+func (client *Client) telemetryOptions() redaction.TelemetryOptions {
+	return redaction.TelemetryOptions{
+		AdditionalFields: client.config.redactFields,
+		ExactFields:      client.config.redactExactFields,
+	}
+}
+
 func (client *Client) recordProbe(ctx context.Context, label string, data any, options ...ProbeOption) {
 	if strings.TrimSpace(label) == "" {
 		return
 	}
-	protectedData, err := redaction.ProtectTelemetry(client.redactor.Redact(data), client.config.redactFields)
+	telemetryOpts := client.telemetryOptions()
+	protectedData, err := redaction.ProtectTelemetryWithOptions(client.redactor.Redact(data), telemetryOpts)
 	if err != nil {
 		return
 	}
 	redactedData := toObjectMap(protectedData)
-	protectedLabel, err := redaction.ProtectTelemetry(label, client.config.redactFields)
+	protectedLabel, err := redaction.ProtectTelemetryWithOptions(label, telemetryOpts)
 	if err != nil {
 		return
 	}

@@ -37,12 +37,19 @@ var DefaultSensitiveFields = []string{
 
 type Redactor struct {
 	sensitive map[string]struct{}
+	exact     map[string]struct{}
 	maxDepth  int
 	maxItems  int
 	maxString int
 }
 
 func New(fields []string) *Redactor {
+	return NewWithExactFields(fields, nil)
+}
+
+// NewWithExactFields constructs a redactor with segment-matched fields and
+// ASCII case-insensitive whole-key exact fields where punctuation is significant.
+func NewWithExactFields(fields []string, exactFields []string) *Redactor {
 	if len(fields) == 0 {
 		fields = DefaultSensitiveFields
 	}
@@ -50,8 +57,16 @@ func New(fields []string) *Redactor {
 	for _, field := range fields {
 		sensitive[strings.ToLower(strings.TrimSpace(field))] = struct{}{}
 	}
+	exact := map[string]struct{}{}
+	for _, field := range exactFields {
+		trimmed := strings.TrimSpace(field)
+		if trimmed != "" {
+			exact[asciiLower(trimmed)] = struct{}{}
+		}
+	}
 	return &Redactor{
 		sensitive: sensitive,
+		exact:     exact,
 		maxDepth:  6,
 		maxItems:  50,
 		maxString: 2048,
@@ -215,15 +230,41 @@ func safeMapKey(value reflect.Value) (string, bool) {
 }
 
 func (redactor *Redactor) isSensitive(key string) bool {
-	if strings.TrimSpace(key) == "" {
+	trimmed := strings.TrimSpace(key)
+	if trimmed == "" {
 		return false
 	}
-	for _, segment := range splitSegments(key) {
+	if len(redactor.exact) > 0 {
+		if _, exists := redactor.exact[asciiLower(trimmed)]; exists {
+			return true
+		}
+	}
+	for _, segment := range splitSegments(trimmed) {
 		if _, exists := redactor.sensitive[segment]; exists {
 			return true
 		}
 	}
 	return false
+}
+
+func asciiLower(value string) string {
+	hasUpper := false
+	for index := 0; index < len(value); index++ {
+		if value[index] >= 'A' && value[index] <= 'Z' {
+			hasUpper = true
+			break
+		}
+	}
+	if !hasUpper {
+		return value
+	}
+	bytes := []byte(value)
+	for index, b := range bytes {
+		if b >= 'A' && b <= 'Z' {
+			bytes[index] = b + ('a' - 'A')
+		}
+	}
+	return string(bytes)
 }
 
 func splitSegments(value string) []string {
