@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+## [3.2.0] - 2026-11-25
+
+- Add exact-key privacy options for capture and relays. Validate browser resource observations before retaining them.
+
 ## [3.1.4] - 2026-11-15
 
 - Record fixed local configuration failure codes without invoking application error renderers, preventing a secondary diagnostic panic and unbounded sensitive error retention. Preserve the Diagnostics API and retry policy.
